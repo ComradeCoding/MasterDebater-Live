@@ -1,0 +1,15 @@
+{
+  "name": "debate-live",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Real-time debate platform: two seated debaters on a stage, unlimited audience chat alongside.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test-clients.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {}
+}

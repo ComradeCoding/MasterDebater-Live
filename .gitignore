@@ -1,0 +1,12 @@
+# Not part of the app.
+# Note: git has no trailing comments, so every comment gets its own line.
+
+# nested copy of the original prototype
+debate-live/
+
+debate-handoff.zip
+SKILL.md
+
+node_modules/
+.env
+*.log

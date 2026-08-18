@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Debate Live</title>
+<style>
+  /* ---------------------------------------------------------------------------
+     "Paste-up" — punk flyer, photocopied and stuck to a wall.
+
+     One loud thing: the ransom headline. Everything else is disciplined —
+     a single hard-shadow offset (4px, no blur), a single rotation (-1.5deg),
+     one spacing scale. Punk gets its attitude from contrast and nerve, not
+     from every element shouting at once.
+  --------------------------------------------------------------------------- */
+  :root {
+    --ink: #0a0b10;          /* photocopy black */
+    --ink-2: #101219;
+    --plate: #161923;
+    --rule: #262a38;
+    --rule-hot: #3a3f52;
+
+    --paper: #f4f1e9;        /* off-white, never pure */
+    --muted: #9aa0b0;
+    --dim: #5f6577;
+
+    --pro: #3d7dff;
+    --pro-soft: rgba(61, 125, 255, .13);
+    --con: #ff2d3f;
+    --con-soft: rgba(255, 45, 63, .13);
+    --acid: #ffc233;         /* the yellow that made every flyer legible */
+    --acid-soft: rgba(255, 194, 51, .14);
+
+    /* Display screams; the reading face is the typewriter it was pasted over. */
+    --display: Bahnschrift, "DIN Condensed", "Franklin Gothic Medium", Impact, "Arial Narrow", sans-serif;
+    --read: "Sitka Text", Constantia, Georgia, serif;
+    --ui: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    --data: "Cascadia Mono", Consolas, ui-monospace, monospace;
+
+    --tilt: -1.5deg;
+    --paste: 4px 4px 0;      /* the one shadow, everywhere */
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* Author `display` rules outrank the UA's [hidden] rule — restore it. */
+  [hidden] { display: none !important; }
+
+  body {
+    font-family: var(--ui);
+    background: var(--ink);
+    color: var(--paper);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Toner speckle. Sits under everything, never eats a click. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: .2;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='x'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23x)'/%3E%3C/svg%3E");
+  }
+  body > * { position: relative; z-index: 1; }
+
+  ::selection { background: var(--acid); color: var(--ink); }
+  :focus-visible { outline: 2px solid var(--acid); outline-offset: 2px; }
+
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--rule); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--rule-hot); }
+
+  /* ------------------------------------------------------------ controls -- */
+
+  button {
+    font-family: var(--display);
+    font-size: 14px;
+    font-weight: 700;
+    font-stretch: 87.5%;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    border: 2px solid var(--paper);
+    border-radius: 0;
+    background: transparent;
+    color: var(--paper);
+    padding: 8px 15px;
+    cursor: pointer;
+    transition: background .1s, color .1s, box-shadow .1s, transform .1s;
+  }
+  button:hover:not(:disabled) {
+    background: var(--paper);
+    color: var(--ink);
+    box-shadow: var(--paste) var(--acid);
+    transform: translate(-1px, -1px);
+  }
+  button:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: 2px 2px 0 var(--acid); }
+  button:disabled { opacity: .3; cursor: not-allowed; border-color: var(--dim); color: var(--dim); }
+
+  /* The one filled control on the page. */
+  button.primary {
+    background: var(--acid);
+    border-color: var(--acid);
+    color: var(--ink);
+    box-shadow: var(--paste) var(--paper);
+  }
+  button.primary:hover:not(:disabled) {
+    background: var(--paper);
+    border-color: var(--paper);
+    color: var(--ink);
+    box-shadow: var(--paste) var(--acid);
+  }
+
+  input {
+    font-family: var(--ui);
+    font-size: 14px;
+    background: var(--ink-2);
+    color: var(--paper);
+    border: 2px solid var(--rule-hot);
+    border-radius: 0;
+    padding: 10px 13px;
+    outline: none;
+    transition: border-color .1s;
+  }
+  input:focus { border-color: var(--acid); }
+  input::placeholder { color: var(--dim); }
+
+  /* -------------------------------------------------------------- chrome -- */
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 22px;
+    background: var(--ink-2);
+    border-bottom: 2px solid var(--paper);
+    flex-shrink: 0;
+  }
+
+  .logo {
+    font-family: var(--display);
+    font-size: 22px;
+    font-weight: 700;
+    font-stretch: 75%;
+    letter-spacing: .01em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  /* Half the wordmark is a cut-out block. */
+  .logo span {
+    background: var(--acid);
+    color: var(--ink);
+    padding: 1px 7px;
+    margin-left: 3px;
+  }
+  /* One live signal, inside the wordmark. Not a second badge next to it. */
+  .logo span::after {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--con);
+    margin-left: 7px;
+    vertical-align: middle;
+    animation: blink 1.6s steps(2, end) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .header-topic {
+    font-family: var(--display);
+    font-size: 15px;
+    font-stretch: 87.5%;
+    text-transform: uppercase;
+    letter-spacing: .02em;
+    color: var(--muted);
+    padding-left: 14px;
+    border-left: 2px solid var(--rule);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .spacer { flex: 1; }
+
+  /* --------------------------------------------------------------- lobby -- */
+
+  #lobby { flex: 1; overflow-y: auto; padding: 52px 24px 72px; }
+  .lobby-inner { max-width: 760px; margin: 0 auto; }
+
+  /* ------------------------------- THE SIGNATURE ------------------------- */
+  /* Ransom note: cut from three different sources, pasted in a row. This is
+     the only place on the page allowed to shout. */
+  .lobby-inner h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-stretch: 75%;
+    text-transform: uppercase;
+    line-height: .92;
+    letter-spacing: -.01em;
+    margin-bottom: 22px;
+  }
+  .lobby-inner h1 .w1,
+  .lobby-inner h1 .w2,
+  .lobby-inner h1 .w3 {
+    display: inline-block;
+    vertical-align: baseline;
+  }
+  /* cut 1 — plain, oversized */
+  .lobby-inner h1 .w1 { font-size: 66px; }
+  /* cut 2 — inverted block, straight */
+  .lobby-inner h1 .w2 {
+    font-size: 66px;
+    background: var(--paper);
+    color: var(--ink);
+    padding: 0 10px;
+  }
+  /* cut 3 — outlined, tilted, on its own line */
+  .lobby-inner h1 .w3 {
+    font-size: 78px;
+    color: transparent;
+    -webkit-text-stroke: 2px var(--acid);
+    transform: rotate(var(--tilt));
+    margin-top: 4px;
+  }
+
+  .lobby-inner .sub {
+    font-family: var(--read);
+    font-size: 15.5px;
+    line-height: 1.55;
+    color: var(--muted);
+    max-width: 46ch;
+    margin-bottom: 32px;
+    border-left: 3px solid var(--con);
+    padding-left: 13px;
+  }
+
+  .create-row { display: flex; gap: 12px; margin-bottom: 50px; flex-wrap: wrap; }
+  .create-row input {
+    flex: 1;
+    min-width: 240px;
+    font-family: var(--display);
+    font-size: 19px;
+    font-stretch: 87.5%;
+    text-transform: uppercase;
+    padding: 12px 14px;
+  }
+
+  .section-label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: var(--data);
+    font-size: 10px;
+    letter-spacing: .24em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 14px;
+  }
+  /* A cut square, the way a flyer marks a list. */
+  .section-label::before {
+    content: "";
+    width: 9px;
+    height: 9px;
+    background: var(--acid);
+    flex-shrink: 0;
+  }
+  .section-label::after { content: ""; flex: 1; height: 2px; background: var(--rule); }
+
+  .room-card {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    background: var(--ink-2);
+    border: 2px solid var(--rule-hot);
+    padding: 18px 20px;
+    margin-bottom: 14px;
+    transition: border-color .1s, box-shadow .1s, transform .1s;
+  }
+  .room-card:hover {
+    border-color: var(--paper);
+    box-shadow: var(--paste) var(--acid);
+    transform: translate(-1px, -1px);
+  }
+  .room-card .info { flex: 1; min-width: 0; }
+  .room-card .t {
+    font-family: var(--display);
+    font-size: 25px;
+    font-stretch: 87.5%;
+    font-weight: 700;
+    line-height: 1.1;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    word-wrap: break-word;
+  }
+  .room-card .meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-family: var(--data);
+    font-size: 10.5px;
+    color: var(--dim);
+  }
+
+  .pill {
+    font-family: var(--data);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 4px 9px;
+    border-radius: 0;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pill.pro { background: var(--pro); color: var(--paper); }
+  .pill.con { background: var(--con); color: var(--paper); }
+  .pill.open { background: transparent; border: 2px solid var(--rule-hot); color: var(--dim); }
+
+  .empty {
+    font-family: var(--display);
+    font-size: 19px;
+    font-stretch: 87.5%;
+    text-transform: uppercase;
+    color: var(--dim);
+    text-align: center;
+    padding: 52px 0;
+    border: 2px dashed var(--rule-hot);
+  }
+
+  /* ---------------------------------------------------------------- room -- */
+
+  #room { flex: 1; display: none; min-height: 0; }
+  #room.active { display: flex; }
+
+  .stage { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+  .seats {
+    display: flex;
+    align-items: stretch;
+    background: var(--ink-2);
+    border-bottom: 2px solid var(--paper);
+    flex-shrink: 0;
+  }
+  .seat {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border: none;
+    padding: 13px 20px;
+  }
+  .seat.pro { border-top: 4px solid var(--pro); background: linear-gradient(180deg, var(--pro-soft), transparent 75%); }
+  .seat.con {
+    border-top: 4px solid var(--con);
+    background: linear-gradient(180deg, var(--con-soft), transparent 75%);
+    flex-direction: row-reverse;
+    text-align: right;
+  }
+  .seat .label {
+    font-family: var(--data);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .26em;
+    margin-bottom: 4px;
+  }
+  .seat.pro .label { color: var(--pro); }
+  .seat.con .label { color: var(--con); }
+  .seat .who {
+    font-family: var(--display);
+    font-size: 22px;
+    font-stretch: 75%;
+    font-weight: 700;
+    text-transform: uppercase;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .seat .who.open {
+    font-family: var(--data);
+    font-size: 12px;
+    font-weight: 400;
+    text-transform: none;
+    color: var(--dim);
+  }
+  .seat button { padding: 6px 12px; font-size: 12px; white-space: nowrap; }
+
+  /* ------------------------------------------------------------ the cut -- */
+  /* Structural, not decorative: arguments stay on their own side of the cut
+     line, and the system lines that mark someone crossing sit ON it. */
+
+  .messages {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  #debateMsgs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 46px;
+    row-gap: 16px;
+    align-content: start;
+    background: repeating-linear-gradient(var(--rule-hot) 0 6px, transparent 6px 12px) 50% 0 / 2px 100% no-repeat;
+  }
+
+  .bubble {
+    max-width: 100%;
+    padding: 13px 16px;
+    border-radius: 0;
+    line-height: 1.55;
+    /* The typewriter body the flyer was pasted over. */
+    font-family: var(--read);
+    font-size: 15px;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+    animation: slam .14s steps(2, end);
+  }
+  @keyframes slam { from { transform: translate(var(--slam, -5px), -3px); opacity: .3; } }
+
+  .bubble .from {
+    font-family: var(--data);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    margin-bottom: 7px;
+  }
+  .bubble.pro {
+    grid-column: 1;
+    justify-self: start;
+    background: var(--pro-soft);
+    border: 2px solid var(--pro);
+    box-shadow: var(--paste) rgba(61, 125, 255, .35);
+    --slam: -5px;
+  }
+  .bubble.pro .from { color: var(--pro); }
+  .bubble.con {
+    grid-column: 2;
+    justify-self: end;
+    text-align: right;
+    background: var(--con-soft);
+    border: 2px solid var(--con);
+    box-shadow: var(--paste) rgba(255, 45, 63, .35);
+    --slam: 5px;
+  }
+  .bubble.con .from { color: var(--con); }
+
+  /* A stamp across the cut. */
+  .sysline {
+    grid-column: 1 / -1;
+    justify-self: center;
+    max-width: 86%;
+    text-align: center;
+    font-family: var(--data);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink);
+    background: var(--acid);
+    padding: 5px 14px;
+    transform: rotate(var(--tilt));
+    overflow-wrap: anywhere;
+  }
+
+  .typing {
+    min-height: 22px;
+    padding: 0 22px 8px;
+    font-family: var(--data);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--acid);
+    flex-shrink: 0;
+  }
+
+  .composer {
+    display: flex;
+    gap: 10px;
+    padding: 14px 22px;
+    background: var(--ink-2);
+    border-top: 2px solid var(--rule);
+    flex-shrink: 0;
+  }
+  .composer input { flex: 1; min-width: 0; }
+  #debateComposer input { font-family: var(--read); font-size: 15px; text-transform: none; }
+  .composer .hint {
+    flex: 1;
+    align-self: center;
+    text-align: center;
+    font-family: var(--data);
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+
+  /* ------------------------------------------------------------ audience -- */
+
+  .side {
+    width: 320px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--ink-2);
+    border-left: 2px solid var(--rule);
+  }
+  .side .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 2px solid var(--rule);
+    font-family: var(--data);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .24em;
+    text-transform: uppercase;
+    color: var(--paper);
+  }
+  .side .head .count { font-family: var(--data); font-size: 10px; font-weight: 400; color: var(--dim); }
+  .side .messages { padding: 6px 0; gap: 0; }
+  .side .composer { padding: 12px 14px; }
+
+  .chatline {
+    font-size: 13.5px;
+    line-height: 1.5;
+    padding: 7px 18px;
+    border-bottom: 1px solid var(--rule);
+    overflow-wrap: anywhere;
+  }
+  .chatline .n { font-family: var(--data); font-size: 11.5px; font-weight: 700; }
+  .chatline .n.pro { color: var(--pro); }
+  .chatline .n.con { color: var(--con); }
+  .chatline .n.audience { color: var(--acid); }
+
+  .side .sysline {
+    display: block;
+    max-width: none;
+    background: none;
+    color: var(--dim);
+    font-size: 9.5px;
+    letter-spacing: .14em;
+    padding: 7px 18px;
+    text-align: left;
+    transform: none;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  /* ------------------------------------------------------- modal + toast -- */
+
+  #modal {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    background: rgba(5, 6, 10, .82);
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+  #modal.active { display: flex; }
+  .modal-box {
+    width: 380px;
+    max-width: calc(100vw - 32px);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    background: var(--ink-2);
+    border: 2px solid var(--paper);
+    box-shadow: 8px 8px 0 var(--acid);
+    padding: 26px;
+  }
+  .modal-box h3 {
+    font-family: var(--display);
+    font-size: 30px;
+    font-stretch: 75%;
+    font-weight: 700;
+    text-transform: uppercase;
+    line-height: 1;
+  }
+  .modal-box .note { font-family: var(--read); font-size: 13.5px; color: var(--muted); }
+
+  #toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) rotate(var(--tilt));
+    z-index: 20;
+    background: var(--con);
+    color: var(--paper);
+    font-family: var(--data);
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 11px 20px;
+    border: 2px solid var(--paper);
+    box-shadow: var(--paste) var(--ink);
+    border-radius: 0;
+    max-width: calc(100vw - 32px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .15s;
+  }
+  #toast.show { opacity: 1; }
+
+  @media (max-width: 760px) {
+    .side { display: none; }
+    #lobby { padding: 34px 20px 56px; }
+    .lobby-inner h1 .w1, .lobby-inner h1 .w2 { font-size: 38px; }
+    .lobby-inner h1 .w3 { font-size: 46px; }
+    .create-row input { font-size: 17px; }
+    /* Phone: the two columns stack, so the cut line goes. */
+    #debateMsgs { display: flex; background: none; }
+    .bubble { max-width: 88%; }
+    .bubble.pro { align-self: flex-start; }
+    .bubble.con { align-self: flex-end; }
+    .sysline { align-self: center; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Debate<span>Live</span></div>
+  <div class="header-topic" id="headerTopic"></div>
+  <div class="spacer"></div>
+  <button id="leaveBtn" hidden>Leave debate</button>
+</header>
+
+<!-- ------------------------------------------------------------- lobby -->
+<div id="lobby">
+  <div class="lobby-inner">
+    <h1><span class="w1">Pick</span> <span class="w2">a side.</span><br><span class="w3">Prove it.</span></h1>
+    <div class="sub">Two seats up front. Everybody else watches and runs their mouth.</div>
+    <div class="create-row">
+      <input id="topicInput" maxlength="140" placeholder="What are we arguing about?" autocomplete="off">
+      <button class="primary" id="createBtn">Start it</button>
+    </div>
+    <div class="section-label">On the floor now</div>
+      <div id="roomList"></div>
+  </div>
+</div>
+
+<!-- -------------------------------------------------------------- room -->
+<div id="room">
+  <div class="stage">
+    <div class="seats">
+      <div class="seat pro">
+        <div>
+          <div class="label">PRO</div>
+          <div class="who open" id="proWho">Open seat</div>
+        </div>
+        <button id="proBtn">Take side</button>
+      </div>
+      <div class="seat con">
+        <div>
+          <div class="label">CON</div>
+          <div class="who open" id="conWho">Open seat</div>
+        </div>
+        <button id="conBtn">Take side</button>
+      </div>
+    </div>
+
+    <div class="messages" id="debateMsgs"></div>
+    <div class="typing" id="typing"></div>
+
+    <!-- Two fixed composers, toggled by role. Rebuilding this markup on every
+         room:state would wipe whatever the debater was mid-way through typing. -->
+    <div class="composer" id="debateComposer">
+      <input id="debateInput" maxlength="1000" placeholder="Make your case…" autocomplete="off">
+      <button class="primary" id="debateSend">Send</button>
+    </div>
+    <div class="composer" id="debateHint" hidden>
+      <div class="hint">Grab a seat if you want in. Otherwise heckle from the sidebar.</div>
+    </div>
+  </div>
+
+  <div class="side">
+    <div class="head">
+      <span>Audience</span>
+      <span class="count" id="audCount">· 0 watching</span>
+    </div>
+    <div class="messages" id="audMsgs"></div>
+    <div class="composer">
+      <input id="audInput" maxlength="1000" placeholder="Run your mouth…" autocomplete="off">
+      <button id="audSend">Send</button>
+    </div>
+  </div>
+</div>
+
+<!-- --------------------------------------------------------- name modal -->
+<div id="modal">
+  <div class="modal-box">
+    <h3>Who are you?</h3>
+    <div class="note">Everyone in the room sees this. Choose well.</div>
+    <input id="nameInput" maxlength="24" placeholder="Your display name" autocomplete="off">
+    <button class="primary" id="modalJoin">Get in</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  // --------------------------------------------------------------- socket --
+  // Minimal client: request/ack pairs, push events, exponential-backoff reconnect.
+
+  var socket = (function () {
+    var listeners = {};        // type -> [fn]
+    var pending = new Map();   // request id -> callback
+    var ws = null;
+    var nextId = 1;
+    var delay = 500;
+
+    function fire(type, data) {
+      var fns = listeners[type];
+      if (fns) fns.slice().forEach(function (fn) { fn(data); });
+    }
+
+    function connect() {
+      var proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(proto + '://' + location.host);
+
+      ws.onopen = function () { delay = 500; fire('_connect'); };
+
+      ws.onmessage = function (ev) {
+        var msg;
+        try { msg = JSON.parse(ev.data); } catch (e) { return; }
+        if (msg.ackId != null) {
+          var cb = pending.get(msg.ackId);
+          pending.delete(msg.ackId);
+          if (cb) cb(msg.data || {});
+        } else if (msg.type) {
+          fire(msg.type, msg.data);
+        }
+      };
+
+      ws.onclose = function () {
+        // Any in-flight request will never be answered — fail them, don't leak.
+        pending.forEach(function (cb) { cb({ error: 'Connection dropped.' }); });
+        pending.clear();
+        fire('_disconnect');
+        setTimeout(connect, delay);
+        delay = Math.min(delay * 2, 8000);
+      };
+    }
+
+    connect();
+
+    return {
+      on: function (type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+      emit: function (type, data, cb) {
+        if (typeof data === 'function') { cb = data; data = undefined; }
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          if (cb) cb({ error: 'Still reconnecting. Hang on.' });
+          return;
+        }
+        var msg = { type: type, data: data };
+        if (cb) { msg.id = nextId++; pending.set(msg.id, cb); }
+        ws.send(JSON.stringify(msg));
+      }
+    };
+  })();
+
+  // ---------------------------------------------------------------- state --
+
+  var myName = safeGet('debateName') || '';
+  var myRole = null;        // 'pro' | 'con' | 'audience' | null
+  var currentRoom = null;   // room summary, or null when in the lobby
+  var pendingRoomId = null; // room the name modal is gating
+
+  // localStorage throws in some sandboxed embeds — never let that kill the app.
+  function safeGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function safeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+  // Every piece of user text goes through this before it reaches innerHTML.
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  var toastTimer;
+  function toast(text) {
+    var el = $('toast');
+    el.textContent = text;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.classList.remove('show'); }, 2500);
+  }
+
+  // Only follow new messages if the reader is already at the bottom, so
+  // scrolling back through history isn't yanked away.
+  function appendScroll(container, el) {
+    var nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+    container.appendChild(el);
+    if (nearBottom) container.scrollTop = container.scrollHeight;
+  }
+
+  function addSystem(container, text) {
+    var el = document.createElement('div');
+    el.className = 'sysline';
+    el.textContent = text;
+    appendScroll(container, el);
+  }
+
+  // ---------------------------------------------------------------- lobby --
+
+  socket.on('lobby:rooms', function (list) {
+    if (currentRoom) return; // don't repaint a lobby nobody is looking at
+    renderLobby(list || []);
+  });
+
+  function renderLobby(list) {
+    var el = $('roomList');
+    el.innerHTML = '';
+
+    if (!list.length) {
+      el.innerHTML = '<div class="empty">Nobody is arguing yet. Fix that.</div>';
+      return;
+    }
+
+    list.slice().sort(function (a, b) { return b.createdAt - a.createdAt; }).forEach(function (r) {
+      var card = document.createElement('div');
+      card.className = 'room-card';
+      card.innerHTML =
+        '<div class="info">' +
+          '<div class="t">' + esc(r.topic) + '</div>' +
+          '<div class="meta">' +
+            (r.proTaken
+              ? '<span class="pill pro">PRO · ' + esc(r.proName) + '</span>'
+              : '<span class="pill open">PRO open</span>') +
+            (r.conTaken
+              ? '<span class="pill con">CON · ' + esc(r.conName) + '</span>'
+              : '<span class="pill open">CON open</span>') +
+            '<span>👀 ' + r.audienceCount + ' watching</span>' +
+          '</div>' +
+        '</div>' +
+        '<button class="primary">Join</button>';
+      card.querySelector('button').onclick = function () { askNameThenJoin(r.id); };
+      el.appendChild(card);
+    });
+  }
+
+  $('createBtn').onclick = function () {
+    var topic = $('topicInput').value.trim();
+    if (!topic) return toast('Give it a topic first.');
+    socket.emit('room:create', { topic: topic }, function (res) {
+      if (res.error) return toast(res.error);
+      $('topicInput').value = '';
+      askNameThenJoin(res.roomId);
+    });
+  };
+  $('topicInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') $('createBtn').click();
+  });
+
+  // ----------------------------------------------------------- name modal --
+
+  function askNameThenJoin(roomId) {
+    pendingRoomId = roomId;
+    if (myName) return joinRoom(roomId);
+    $('modal').classList.add('active');
+    $('nameInput').value = '';
+    $('nameInput').focus();
+  }
+
+  $('modalJoin').onclick = function () {
+    var name = $('nameInput').value.trim();
+    if (!name) return toast('Need a name first.');
+    myName = name;
+    safeSet('debateName', name);
+    $('modal').classList.remove('active');
+    if (pendingRoomId) joinRoom(pendingRoomId);
+  };
+  $('nameInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') $('modalJoin').click();
+  });
+
+  // ----------------------------------------------------------------- room --
+
+  function joinRoom(roomId) {
+    socket.emit('room:join', { roomId: roomId, name: myName }, function (res) {
+      if (res.error) {
+        showLobby();
+        return toast(res.error);
+      }
+      currentRoom = res.room;
+      myRole = res.role;
+      pendingRoomId = null;
+
+      $('lobby').hidden = true;
+      $('room').classList.add('active');
+      $('leaveBtn').hidden = false;
+      $('headerTopic').textContent = res.room.topic;
+
+      $('debateMsgs').innerHTML = '';
+      $('audMsgs').innerHTML = '';
+      $('typing').textContent = '';
+      (res.debateMessages || []).forEach(addDebateMsg);
+      (res.audienceMessages || []).forEach(addAudienceMsg);
+      $('debateMsgs').scrollTop = $('debateMsgs').scrollHeight;
+      $('audMsgs').scrollTop = $('audMsgs').scrollHeight;
+
+      renderRoom();
+    });
+  }
+
+  function showLobby() {
+    currentRoom = null;
+    myRole = null;
+    pendingRoomId = null;
+    $('room').classList.remove('active');
+    $('lobby').hidden = false;
+    $('leaveBtn').hidden = true;
+    $('headerTopic').textContent = '';
+    $('typing').textContent = '';
+  }
+
+  $('leaveBtn').onclick = function () {
+    socket.emit('room:leave');
+    showLobby();
+  };
+
+  socket.on('room:state', function (r) {
+    if (!currentRoom || !r || r.id !== currentRoom.id) return;
+    currentRoom = r;
+    renderRoom();
+  });
+
+  // Single source of truth for every role-dependent control. Called both on
+  // room:state pushes and — crucially — right after a seat ack updates myRole,
+  // because the broadcast can land before the ack does.
+  function renderRoom() {
+    var r = currentRoom;
+    if (!r) return;
+
+    $('proWho').textContent = r.proTaken ? r.proName : 'Open seat';
+    $('proWho').className = 'who' + (r.proTaken ? '' : ' open');
+    $('conWho').textContent = r.conTaken ? r.conName : 'Open seat';
+    $('conWho').className = 'who' + (r.conTaken ? '' : ' open');
+    $('audCount').textContent = '· ' + r.audienceCount + ' watching';
+
+    ['pro', 'con'].forEach(function (side) {
+      var btn = $(side + 'Btn');
+      var other = side === 'pro' ? 'con' : 'pro';
+      if (myRole === side) {
+        btn.textContent = 'Step down';
+        btn.disabled = false;
+      } else {
+        btn.textContent = 'Take side';
+        btn.disabled = r[side + 'Taken'] || myRole === other;
+      }
+    });
+
+    var seated = myRole === 'pro' || myRole === 'con';
+    $('debateComposer').hidden = !seated;
+    $('debateHint').hidden = seated;
+  }
+
+  function toggleSeat(side) {
+    if (myRole === side) {
+      socket.emit('seat:release', function (res) {
+        if (res.error) return toast(res.error);
+        myRole = res.role;
+        renderRoom();
+      });
+    } else {
+      socket.emit('seat:claim', { side: side }, function (res) {
+        if (res.error) return toast(res.error);
+        myRole = res.role;
+        renderRoom();
+      });
+    }
+  }
+  $('proBtn').onclick = function () { toggleSeat('pro'); };
+  $('conBtn').onclick = function () { toggleSeat('con'); };
+
+  // ---------------------------------------------------------------- stage --
+
+  socket.on('debate:message', addDebateMsg);
+  socket.on('debate:system', function (m) { addSystem($('debateMsgs'), m.text); });
+
+  function addDebateMsg(m) {
+    var el = document.createElement('div');
+    el.className = 'bubble ' + (m.role === 'con' ? 'con' : 'pro');
+    el.innerHTML =
+      '<div class="from">' + esc(m.name) + ' · ' + esc(String(m.role).toUpperCase()) + '</div>' +
+      esc(m.text);
+    appendScroll($('debateMsgs'), el);
+  }
+
+  var typingTimeout;
+  socket.on('debate:typing', function (t) {
+    clearTimeout(typingTimeout);
+    if (!t || !t.isTyping) {
+      $('typing').textContent = '';
+      return;
+    }
+    $('typing').textContent = t.name + ' (' + String(t.role).toUpperCase() + ') is typing…';
+    // Safety net: if the "stopped typing" event never arrives, don't stick.
+    typingTimeout = setTimeout(function () { $('typing').textContent = ''; }, 5000);
+  });
+
+  var typingSent = false;
+  var typingIdle;
+  function signalTyping(isTyping) {
+    if (isTyping === typingSent) return;
+    typingSent = isTyping;
+    socket.emit('debate:typing', { isTyping: isTyping });
+  }
+
+  $('debateInput').addEventListener('input', function () {
+    signalTyping(true);
+    clearTimeout(typingIdle);
+    typingIdle = setTimeout(function () { signalTyping(false); }, 1200);
+  });
+
+  function sendDebate() {
+    var input = $('debateInput');
+    var text = input.value.trim();
+    if (!text) return;
+    socket.emit('debate:message', { text: text }, function (res) {
+      if (res.error) return toast(res.error);
+      input.value = '';
+      clearTimeout(typingIdle);
+      signalTyping(false);
+    });
+  }
+  $('debateSend').onclick = sendDebate;
+  $('debateInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') sendDebate();
+  });
+
+  // ------------------------------------------------------------- audience --
+
+  socket.on('audience:message', addAudienceMsg);
+  socket.on('audience:system', function (m) { addSystem($('audMsgs'), m.text); });
+
+  function addAudienceMsg(m) {
+    var role = m.role === 'pro' || m.role === 'con' ? m.role : 'audience';
+    var el = document.createElement('div');
+    el.className = 'chatline';
+    el.innerHTML = '<span class="n ' + role + '">' + esc(m.name) + ':</span> ' + esc(m.text);
+    appendScroll($('audMsgs'), el);
+  }
+
+  function sendAudience() {
+    var input = $('audInput');
+    var text = input.value.trim();
+    if (!text) return;
+    socket.emit('audience:message', { text: text }, function (res) {
+      if (res.error) return toast(res.error);
+      input.value = '';
+    });
+  }
+  $('audSend').onclick = sendAudience;
+  $('audInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') sendAudience();
+  });
+
+  // ------------------------------------------------------------ reconnect --
+
+  var wasDisconnected = false;
+  socket.on('_disconnect', function () { wasDisconnected = true; });
+  socket.on('_connect', function () {
+    if (wasDisconnected && currentRoom) {
+      var roomId = currentRoom.id;
+      // The server has no memory of us; rejoin from scratch as audience.
+      // Seats are deliberately not auto-reclaimed — they may be someone else's now.
+      currentRoom = null;
+      myRole = null;
+      joinRoom(roomId);
+      toast('Back online.');
+    }
+    wasDisconnected = false;
+  });
+})();
+</script>
+</body>
+</html>
