@@ -1,4 +1,4 @@
-# Debate Live
+# MasterDebater Live
 
 A real-time debate platform shaped like a boxing ring with a crowd. Two debaters
 claim the **PRO** and **CON** seats and argue on a central stage; an unlimited

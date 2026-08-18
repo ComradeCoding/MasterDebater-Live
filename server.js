@@ -1,7 +1,7 @@
 'use strict';
 //
-// Debate Live — a real-time debate platform: two seated debaters on a central
-// stage, an unlimited audience chatting alongside them.
+// MasterDebater Live — a real-time debate platform: two seated debaters on a
+// central stage, an unlimited audience chatting alongside them.
 //
 // Zero dependencies. Built-in `http` for static files, a hand-rolled RFC 6455
 // WebSocket server for the realtime layer.
@@ -604,7 +604,7 @@ const heartbeat = setInterval(() => {
 if (heartbeat.unref) heartbeat.unref();
 
 server.listen(PORT, () => {
-  console.log(`Debate Live running at http://localhost:${PORT}`);
+  console.log(`MasterDebater Live running at http://localhost:${PORT}`);
 });
 
 module.exports = { server };

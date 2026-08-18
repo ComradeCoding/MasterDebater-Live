@@ -1,6 +1,6 @@
 'use strict';
 //
-// Protocol-level end-to-end tests for Debate Live.
+// Protocol-level end-to-end tests for MasterDebater Live.
 //
 // Drives real WebSocket clients against a real server using Node 22's built-in
 // global WebSocket — no test framework, no dependencies.
