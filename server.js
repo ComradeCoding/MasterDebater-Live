@@ -29,7 +29,12 @@ const PORT = Number(process.env.PORT) || 3000;
 // ===========================================================================
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
-const MAX_FRAME = 10 * 1024 * 1024; // 10MB
+// The largest legitimate protocol message is ~1KB of JSON; anything bigger is
+// an attack or a bug, and buffering it per-connection is a memory DoS vector.
+const MAX_FRAME = 64 * 1024;
+// A peer that stops reading makes socket.write() buffer in our memory. Past
+// this backlog the connection is dropped rather than ballooning the process.
+const MAX_BACKLOG = 1024 * 1024;
 
 const OP_CONT = 0x0;
 const OP_TEXT = 0x1;
@@ -163,6 +168,13 @@ class WSConnection {
 
   _sendFrame(opcode, payload) {
     if (!this.open) return;
+    if (this.socket.writableLength > MAX_BACKLOG) {
+      // Slow consumer: drop it instead of buffering unboundedly. Don't go
+      // through close() — that would try to write yet another frame.
+      this._teardown();
+      this.socket.destroy();
+      return;
+    }
     const len = payload.length;
     let header;
     if (len < 126) {
@@ -211,6 +223,20 @@ class WSConnection {
   }
 }
 
+// Browsers always send an Origin header on WebSocket upgrades. Without this
+// check, any web page a user visits can open ws://our-host from their browser
+// and act with their network position (cross-site WebSocket hijacking).
+// Non-browser clients (the test harness, curl-alikes) send no Origin and pass.
+function originAllowed(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
 function acceptUpgrade(req, socket) {
   const key = req.headers['sec-websocket-key'];
   const version = req.headers['sec-websocket-version'];
@@ -237,6 +263,7 @@ const MAX_TOPIC_LEN = 140;
 const MAX_NAME_LEN = 24;
 const MAX_MSG_LEN = 1000;
 const MAX_HISTORY = 200;
+const MAX_ROOMS = 200; // hard cap so room:create spam can't exhaust memory
 const EMPTY_ROOM_TTL = 5 * 60 * 1000;
 
 const store = (() => {
@@ -303,8 +330,14 @@ const store = (() => {
 
 const clients = new Set(); // every live connection, in a room or in the lobby
 
-// Trim, then truncate. Empty-after-trim is the caller's problem to reject.
-const clean = (value, max) => String(value ?? '').trim().slice(0, max);
+// Control characters (C0/C1) and bidi/zero-width overrides have no place in
+// names, topics, or single-line chat: they enable name spoofing (U+202E flips
+// text direction) and log injection. Stripped before trim/truncate.
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+// Strip, trim, then truncate. Empty-after-trim is the caller's problem to reject.
+const clean = (value, max) =>
+  String(value ?? '').replace(CONTROL_CHARS, '').trim().slice(0, max);
 
 function roomSummary(room) {
   let audienceCount = 0;
@@ -383,8 +416,14 @@ const handlers = {
   'room:create'(client, { topic } = {}) {
     topic = clean(topic, MAX_TOPIC_LEN);
     if (!topic) return { error: 'Give it a topic first.' };
+    if (store.listRooms().length >= MAX_ROOMS) {
+      return { error: 'Too many live debates right now. Try again soon.' };
+    }
 
     const room = store.createRoom(topic);
+    // The creator hasn't joined yet — without this, a room that never gets a
+    // member has no reap path and leaks forever. Joining cancels the timer.
+    store.scheduleReap(room, broadcastLobby);
     broadcastLobby();
     return { roomId: room.id };
   },
@@ -539,6 +578,15 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, {
       'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
       'Cache-Control': 'no-cache',
+      // The page uses one inline script/style block, so 'unsafe-inline' has to
+      // stay — the CSP still blocks external script injection and framing.
+      'Content-Security-Policy':
+        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+        "img-src 'self' data:; connect-src 'self' ws: wss:; " +
+        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'no-referrer',
     });
     res.end(req.method === 'HEAD' ? undefined : data);
   });
@@ -546,8 +594,20 @@ const server = http.createServer((req, res) => {
 
 let nextClientId = 1;
 
+// Per-connection token bucket: enough for any real user, far too little for a
+// broadcast-amplification flood. A client that keeps pushing after running dry
+// is dropped outright.
+const RATE_BURST = 20;
+const RATE_REFILL_PER_SEC = 10;
+const RATE_MAX_STRIKES = 200;
+
 server.on('upgrade', (req, socket) => {
   if ((req.headers.upgrade || '').toLowerCase() !== 'websocket') {
+    socket.destroy();
+    return;
+  }
+  if (!originAllowed(req)) {
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
     socket.destroy();
     return;
   }
@@ -555,6 +615,9 @@ server.on('upgrade', (req, socket) => {
   if (!ws) return;
 
   const client = { id: nextClientId++, ws, name: null, role: null, room: null };
+  client.tokens = RATE_BURST;
+  client.lastRefill = Date.now();
+  client.strikes = 0;
   clients.add(client);
   sendTo(client, 'lobby:rooms', store.listRooms().map(roomSummary));
 
@@ -563,7 +626,30 @@ server.on('upgrade', (req, socket) => {
     try { msg = JSON.parse(raw); } catch { return; }
     if (!msg || typeof msg.type !== 'string') return;
 
-    const handler = handlers[msg.type];
+    // Only echo ack ids a sane client would send; anything else (objects,
+    // huge strings) is dropped rather than reflected back.
+    const ackId =
+      typeof msg.id === 'number' || (typeof msg.id === 'string' && msg.id.length <= 64)
+        ? msg.id
+        : null;
+
+    const now = Date.now();
+    client.tokens = Math.min(
+      RATE_BURST,
+      client.tokens + ((now - client.lastRefill) * RATE_REFILL_PER_SEC) / 1000
+    );
+    client.lastRefill = now;
+    if (client.tokens < 1) {
+      if (++client.strikes > RATE_MAX_STRIKES) return ws.close(1008); // policy violation
+      if (ackId != null) ws.send(JSON.stringify({ ackId, data: { error: 'Slow down.' } }));
+      return;
+    }
+    client.tokens -= 1;
+    client.strikes = 0;
+
+    // Own-property lookup only: `{"type":"constructor"}` must not dispatch
+    // down the prototype chain.
+    const handler = Object.hasOwn(handlers, msg.type) ? handlers[msg.type] : null;
     let result;
     if (!handler) {
       result = { error: `Unknown message type: ${msg.type}` };
@@ -577,7 +663,7 @@ server.on('upgrade', (req, socket) => {
         result = { error: 'That broke on our end.' };
       }
     }
-    if (msg.id != null) ws.send(JSON.stringify({ ackId: msg.id, data: result ?? { ok: true } }));
+    if (ackId != null) ws.send(JSON.stringify({ ackId, data: result ?? { ok: true } }));
   };
 
   ws.onclose = () => {
