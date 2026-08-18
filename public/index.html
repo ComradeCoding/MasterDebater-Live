@@ -28,8 +28,11 @@
     --pro-soft: rgba(61, 125, 255, .13);
     --con: #ff2d3f;
     --con-soft: rgba(255, 45, 63, .13);
-    --acid: #ffc233;         /* the yellow that made every flyer legible */
-    --acid-soft: rgba(255, 194, 51, .14);
+    /* What the two sides make when they mix. Light tone for text and glow,
+       deep tone for fills that carry white text. */
+    --neon: #b96bff;
+    --neon-deep: #8b2fe6;
+    --neon-soft: rgba(185, 107, 255, .14);
 
     /* Display screams; the reading face is the typewriter it was pasted over. */
     --display: Bahnschrift, "DIN Condensed", "Franklin Gothic Medium", Impact, "Arial Narrow", sans-serif;
@@ -68,8 +71,8 @@
   }
   body > * { position: relative; z-index: 1; }
 
-  ::selection { background: var(--acid); color: var(--ink); }
-  :focus-visible { outline: 2px solid var(--acid); outline-offset: 2px; }
+  ::selection { background: var(--neon-deep); color: #fff; }
+  :focus-visible { outline: 2px solid var(--neon); outline-offset: 2px; }
 
   ::-webkit-scrollbar { width: 9px; height: 9px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -96,24 +99,24 @@
   button:hover:not(:disabled) {
     background: var(--paper);
     color: var(--ink);
-    box-shadow: var(--paste) var(--acid);
+    box-shadow: var(--paste) var(--neon);
     transform: translate(-1px, -1px);
   }
-  button:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: 2px 2px 0 var(--acid); }
+  button:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: 2px 2px 0 var(--neon); }
   button:disabled { opacity: .3; cursor: not-allowed; border-color: var(--dim); color: var(--dim); }
 
   /* The one filled control on the page. */
   button.primary {
-    background: var(--acid);
-    border-color: var(--acid);
-    color: var(--ink);
+    background: var(--neon-deep);
+    border-color: var(--neon-deep);
+    color: #fff;
     box-shadow: var(--paste) var(--paper);
   }
   button.primary:hover:not(:disabled) {
     background: var(--paper);
     border-color: var(--paper);
     color: var(--ink);
-    box-shadow: var(--paste) var(--acid);
+    box-shadow: var(--paste) var(--neon);
   }
 
   input {
@@ -127,7 +130,7 @@
     outline: none;
     transition: border-color .1s;
   }
-  input:focus { border-color: var(--acid); }
+  input:focus { border-color: var(--neon); }
   input::placeholder { color: var(--dim); }
 
   /* -------------------------------------------------------------- chrome -- */
@@ -153,8 +156,8 @@
   }
   /* Half the wordmark is a cut-out block. */
   .logo span {
-    background: var(--acid);
-    color: var(--ink);
+    background: var(--neon-deep);
+    color: #fff;
     padding: 1px 7px;
   }
   /* One live signal, inside the wordmark. Not a second badge next to it. */
@@ -164,7 +167,7 @@
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--con);
+    background: #fff;
     margin-left: 7px;
     vertical-align: middle;
     animation: blink 1.6s steps(2, end) infinite;
@@ -225,17 +228,17 @@
      neighbouring glows read as separate letters instead of one haze. */
   .lobby-inner h1 .w3 {
     font-size: 78px;
-    color: #fff4d6;
+    color: #f7ecff;
     -webkit-text-stroke: 0;
     letter-spacing: .075em;
     transform: rotate(var(--tilt));
     transform-origin: left center;
     margin-top: 16px;
     text-shadow:
-      0 0 4px rgba(255, 194, 51, .95),
-      0 0 11px rgba(255, 194, 51, .8),
-      0 0 26px rgba(255, 194, 51, .55),
-      0 0 54px rgba(255, 194, 51, .32);
+      0 0 4px rgba(185, 107, 255, .95),
+      0 0 11px rgba(185, 107, 255, .82),
+      0 0 26px rgba(185, 107, 255, .6),
+      0 0 54px rgba(185, 107, 255, .38);
     animation: strike 1.1s steps(1, end) 1;
   }
   /* The stutter a tube makes before it settles. Runs once, not on a loop. */
@@ -282,7 +285,7 @@
     content: "";
     width: 9px;
     height: 9px;
-    background: var(--acid);
+    background: var(--neon);
     flex-shrink: 0;
   }
   .section-label::after { content: ""; flex: 1; height: 2px; background: var(--rule); }
@@ -299,7 +302,7 @@
   }
   .room-card:hover {
     border-color: var(--paper);
-    box-shadow: var(--paste) var(--acid);
+    box-shadow: var(--paste) var(--neon);
     transform: translate(-1px, -1px);
   }
   .room-card .info { flex: 1; min-width: 0; }
@@ -486,8 +489,8 @@
     font-weight: 700;
     letter-spacing: .16em;
     text-transform: uppercase;
-    color: var(--ink);
-    background: var(--acid);
+    color: #fff;
+    background: var(--neon-deep);
     padding: 5px 14px;
     transform: rotate(var(--tilt));
     overflow-wrap: anywhere;
@@ -501,7 +504,7 @@
     font-weight: 700;
     letter-spacing: .12em;
     text-transform: uppercase;
-    color: var(--acid);
+    color: var(--neon);
     flex-shrink: 0;
   }
 
@@ -564,7 +567,7 @@
   .chatline .n { font-family: var(--data); font-size: 11.5px; font-weight: 700; }
   .chatline .n.pro { color: var(--pro); }
   .chatline .n.con { color: var(--con); }
-  .chatline .n.audience { color: var(--acid); }
+  .chatline .n.audience { color: var(--neon); }
 
   .side .sysline {
     display: block;
@@ -599,7 +602,7 @@
     gap: 14px;
     background: var(--ink-2);
     border: 2px solid var(--paper);
-    box-shadow: 8px 8px 0 var(--acid);
+    box-shadow: 8px 8px 0 var(--neon);
     padding: 26px;
   }
   .modal-box h3 {
