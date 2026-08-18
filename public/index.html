@@ -529,6 +529,77 @@
     color: var(--dim);
   }
 
+  /* ------------------------------------------------------------- verdict -- */
+  /* The room's running call. Everyone starts neutral, which is the one
+     position nobody can get back to once they leave it. */
+
+  .verdict {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 11px 22px 12px;
+    background: var(--ink-2);
+    border-bottom: 2px solid var(--rule);
+    flex-shrink: 0;
+  }
+  .gaugewrap { flex: 1; min-width: 0; }
+  .gauge {
+    position: relative;
+    display: flex;
+    height: 15px;
+    border: 2px solid var(--rule-hot);
+    background: var(--plate);
+  }
+  .gauge .fill { transition: width .3s cubic-bezier(.2, .9, .3, 1); }
+  .gauge .fill.pro { background: var(--pro); }
+  .gauge .fill.con { background: var(--con); }
+  .gauge.nocall .fill { background: var(--rule-hot); }
+  /* Where the room started out. Movement off this line is the whole story. */
+  .gauge .tick {
+    position: absolute;
+    left: 50%;
+    top: -4px;
+    bottom: -4px;
+    width: 2px;
+    margin-left: -1px;
+    background: repeating-linear-gradient(var(--paper) 0 3px, transparent 3px 6px);
+  }
+  .readout {
+    margin-top: 7px;
+    text-align: center;
+    font-family: var(--data);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .readout b { color: var(--paper); }
+  .readout .pro { color: var(--pro); }
+  .readout .con { color: var(--con); }
+
+  button.lean { padding: 7px 13px; font-size: 12px; white-space: nowrap; }
+  /* Your own pick reads as a filled block, so the only button still offering
+     you anything is the other side. */
+  button.lean.pro[aria-pressed="true"],
+  button.lean.pro[aria-pressed="true"]:hover {
+    background: var(--pro);
+    border-color: var(--pro);
+    color: var(--ink);
+    box-shadow: var(--paste) rgba(61, 125, 255, .35);
+    transform: none;
+    cursor: default;
+  }
+  button.lean.con[aria-pressed="true"],
+  button.lean.con[aria-pressed="true"]:hover {
+    background: var(--con);
+    border-color: var(--con);
+    color: var(--ink);
+    box-shadow: var(--paste) rgba(255, 45, 63, .35);
+    transform: none;
+    cursor: default;
+  }
+
   /* ------------------------------------------------------------ audience -- */
 
   .side {
@@ -651,6 +722,9 @@
     .bubble.pro { align-self: flex-start; }
     .bubble.con { align-self: flex-end; }
     .sysline { align-self: center; }
+    .verdict { flex-wrap: wrap; padding: 10px 16px; }
+    .gaugewrap { order: -1; flex: 1 0 100%; }
+    .verdict button.lean { flex: 1; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -699,6 +773,20 @@
         </div>
         <button id="conBtn">Take side</button>
       </div>
+    </div>
+
+    <!-- Visible to everyone; the two buttons hide for whoever is seated. -->
+    <div class="verdict">
+      <button class="lean pro" id="leanPro" aria-pressed="false">Side with PRO</button>
+      <div class="gaugewrap">
+        <div class="gauge nocall" id="gauge" aria-hidden="true">
+          <div class="fill pro" id="gaugePro" style="width:50%"></div>
+          <div class="fill con" id="gaugeCon" style="width:50%"></div>
+          <div class="tick"></div>
+        </div>
+        <div class="readout" id="gaugeRead" aria-live="polite">Nobody has called it yet</div>
+      </div>
+      <button class="lean con" id="leanCon" aria-pressed="false">Side with CON</button>
     </div>
 
     <div class="messages" id="debateMsgs"></div>
@@ -811,6 +899,8 @@
   var myName = safeGet('debateName') || '';
   var myRole = null;        // 'pro' | 'con' | 'audience' | null
   var currentRoom = null;   // room summary, or null when in the lobby
+  var myLean = null;        // 'pro' | 'con' | null, and null is a one-way door
+  var lean = { pro: 0, con: 0 };
   var pendingRoomId = null; // room the name modal is gating
 
   // localStorage throws in some sandboxed embeds — never let that kill the app.
@@ -931,6 +1021,8 @@
       }
       currentRoom = res.room;
       myRole = res.role;
+      myLean = res.myLean || null;
+      lean = res.lean || { pro: 0, con: 0 };
       pendingRoomId = null;
 
       $('lobby').hidden = true;
@@ -953,6 +1045,8 @@
   function showLobby() {
     currentRoom = null;
     myRole = null;
+    myLean = null;
+    lean = { pro: 0, con: 0 };
     pendingRoomId = null;
     $('room').classList.remove('active');
     $('lobby').hidden = false;
@@ -1000,7 +1094,69 @@
     var seated = myRole === 'pro' || myRole === 'con';
     $('debateComposer').hidden = !seated;
     $('debateHint').hidden = seated;
+
+    // A debater picking a favourite would be marking their own paper.
+    $('leanPro').hidden = seated;
+    $('leanCon').hidden = seated;
+    renderLean();
   }
+
+  // -------------------------------------------------------------- verdict --
+
+  socket.on('room:lean', function (t) {
+    if (!currentRoom || !t) return;
+    lean = t;
+    renderLean();
+  });
+
+  function renderLean() {
+    var pro = lean.pro | 0;
+    var con = lean.con | 0;
+    var total = pro + con;
+    // With nobody voting the bar sits on the tick, which is exactly what
+    // "the room has not moved" should look like.
+    var proPct = total ? (pro / total) * 100 : 50;
+
+    $('gauge').classList.toggle('nocall', total === 0);
+    $('gaugePro').style.width = proPct + '%';
+    $('gaugeCon').style.width = (100 - proPct) + '%';
+
+    var read = $('gaugeRead');
+    if (!total) {
+      read.textContent = 'Nobody has called it yet';
+    } else if (pro === con) {
+      read.innerHTML = 'Dead even · <b>' + pro + '</b> a side';
+    } else {
+      var up = pro > con ? 'pro' : 'con';
+      read.innerHTML =
+        '<b>' + pro + '</b> pro · <b>' + con + '</b> con · ' +
+        '<span class="' + up + '">' + up + ' up ' + Math.abs(pro - con) + '</span>';
+    }
+
+    ['pro', 'con'].forEach(function (side) {
+      var btn = $(side === 'pro' ? 'leanPro' : 'leanCon');
+      var mine = myLean === side;
+      btn.setAttribute('aria-pressed', mine ? 'true' : 'false');
+      btn.textContent = mine
+        ? 'You are ' + side.toUpperCase()
+        : myLean
+          ? 'Flip to ' + side.toUpperCase()
+          : 'Side with ' + side.toUpperCase();
+    });
+  }
+
+  function setLean(side) {
+    if (myLean === side) return; // clicking your own side buys you nothing
+    var first = myLean === null;
+    socket.emit('audience:lean', { side: side }, function (res) {
+      if (res.error) return toast(res.error);
+      myLean = res.lean;
+      renderLean();
+      if (first) toast('Locked in. Flip whenever you want, but the fence is gone.');
+    });
+  }
+  $('leanPro').onclick = function () { setLean('pro'); };
+  $('leanCon').onclick = function () { setLean('con'); };
 
   function toggleSeat(side) {
     if (myRole === side) {

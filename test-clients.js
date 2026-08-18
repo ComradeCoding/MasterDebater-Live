@@ -218,6 +218,53 @@ async function run() {
     listed && listed.proName === 'Alice' && listed.conName === 'Bob' && listed.audienceCount === 2,
     JSON.stringify(listed));
 
+  // --- audience leaning ---------------------------------------------------
+  // Members here: alice (PRO seat), bob (CON seat), carol + dave (audience).
+  const tallies = [];
+  carol.on('room:lean', (t) => tallies.push(t));
+  const last = () => tallies[tallies.length - 1];
+
+  check('joiners start neutral with an empty tally',
+    dJoin.lean && dJoin.lean.pro === 0 && dJoin.lean.con === 0 && dJoin.myLean === null,
+    JSON.stringify({ lean: dJoin.lean, myLean: dJoin.myLean }));
+
+  const neutral = await carol.emit('audience:lean', { side: 'neutral' });
+  check('there is no wire format for going back to neutral', !!neutral.error,
+    JSON.stringify(neutral));
+
+  const cLean = await carol.emit('audience:lean', { side: 'pro' });
+  check('an audience member can pick a side', cLean.lean === 'pro', JSON.stringify(cLean));
+  await dave.emit('audience:lean', { side: 'con' });
+  await wait(200);
+  check('the tally counts both picks', last().pro === 1 && last().con === 1,
+    JSON.stringify(last()));
+
+  const sysBefore = carol.got('audience:system').length;
+  const tallyBefore = tallies.length;
+  await carol.emit('audience:lean', { side: 'pro' }); // the side she already holds
+  await wait(150);
+  check('re-picking your own side is a no-op',
+    carol.got('audience:system').length === sysBefore && tallies.length === tallyBefore);
+
+  await carol.emit('audience:lean', { side: 'con' });
+  await wait(200);
+  check('flipping moves the tally both ways', last().pro === 0 && last().con === 2,
+    JSON.stringify(last()));
+  check('a flip is announced to the audience',
+    carol.got('audience:system').some((m) => m.text === 'Guest flipped to CON'),
+    JSON.stringify(carol.got('audience:system').slice(-3)));
+
+  const beforeSeated = tallies.length;
+  const aLean = await alice.emit('audience:lean', { side: 'pro' }); // alice holds PRO
+  await wait(150);
+  check('a seated debater cannot pad their own tally',
+    !!aLean.ok && tallies.length === beforeSeated, JSON.stringify(aLean));
+
+  await dave.emit('room:leave');
+  await wait(200);
+  check('leaving takes your vote with you', last().pro === 0 && last().con === 1,
+    JSON.stringify(last()));
+
   // --- seat release -------------------------------------------------------
   const released = await bob.emit('seat:release');
   check('seat:release returns the caller to audience', released.role === 'audience');

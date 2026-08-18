@@ -354,6 +354,20 @@ function roomSummary(room) {
   };
 }
 
+// Only the audience is counted. A seated debater voting for their own side
+// would be marking their own paper, so seats are skipped; their pick is kept
+// so it comes back if they step down.
+function leanTally(room) {
+  let pro = 0;
+  let con = 0;
+  for (const c of room.members) {
+    if (c.role !== 'audience') continue;
+    if (c.lean === 'pro') pro++;
+    else if (c.lean === 'con') con++;
+  }
+  return { pro, con };
+}
+
 // --- broadcast helpers -----------------------------------------------------
 
 function sendTo(client, type, data) {
@@ -377,6 +391,7 @@ function broadcastLobby() {
 // the seat bar go stale (see README, pitfall #4).
 function publishRoom(room) {
   broadcastRoom(room, 'room:state', roomSummary(room));
+  broadcastRoom(room, 'room:lean', leanTally(room));
   broadcastLobby();
 }
 
@@ -407,6 +422,7 @@ function leaveRoom(client) {
 
   client.room = null;
   client.role = null;
+  client.lean = null;
 
   publishRoom(room);
   store.scheduleReap(room, broadcastLobby);
@@ -438,6 +454,7 @@ const handlers = {
     client.name = clean(name, MAX_NAME_LEN) || 'Guest';
     client.role = 'audience';
     client.room = room;
+    client.lean = null;
     store.addMember(room, client);
 
     broadcastRoom(room, 'audience:system',
@@ -451,6 +468,8 @@ const handlers = {
       // Late joiners get both streams in full so nothing is missed.
       debateMessages: room.debateMessages,
       audienceMessages: room.audienceMessages,
+      lean: leanTally(room),
+      myLean: null,
     };
   },
 
@@ -523,6 +542,29 @@ const handlers = {
       { role: client.role, name: client.name, text, ts: Date.now() });
     broadcastRoom(room, 'audience:message', msg);
     return { ok: true };
+  },
+
+  // Neutral is the starting position, not a destination: this only accepts a
+  // side, so there is no wire format for going back.
+  'audience:lean'(client, { side } = {}) {
+    const room = client.room;
+    if (!room) return { error: 'Join a debate first.' };
+    if (side !== 'pro' && side !== 'con') return { error: 'Pick PRO or CON.' };
+    if (client.lean === side) return { ok: true, lean: side };
+
+    const flipped = client.lean !== null;
+    client.lean = side;
+
+    // Only a flip gets announced. First picks would be a wall of noise at the
+    // top of every debate, whereas someone changing their mind is the point.
+    if (flipped) {
+      broadcastRoom(room, 'audience:system', {
+        text: `${client.name} flipped to ${side.toUpperCase()}`,
+        ts: Date.now(),
+      });
+    }
+    if (client.role === 'audience') broadcastRoom(room, 'room:lean', leanTally(room));
+    return { ok: true, lean: side };
   },
 
   'debate:typing'(client, { isTyping } = {}) {
@@ -614,7 +656,7 @@ server.on('upgrade', (req, socket) => {
   const ws = acceptUpgrade(req, socket);
   if (!ws) return;
 
-  const client = { id: nextClientId++, ws, name: null, role: null, room: null };
+  const client = { id: nextClientId++, ws, name: null, role: null, room: null, lean: null };
   client.tokens = RATE_BURST;
   client.lastRefill = Date.now();
   client.strikes = 0;

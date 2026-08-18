@@ -86,23 +86,33 @@ Client → server: `{ id?, type, data }`. When `id` is present the server replie
 | Type | Data | Ack |
 | --- | --- | --- |
 | `room:create` | `{ topic }` | `{ roomId }` |
-| `room:join` | `{ roomId, name }` | `{ ok, room, role, debateMessages, audienceMessages }` |
+| `room:join` | `{ roomId, name }` | `{ ok, room, role, debateMessages, audienceMessages, lean, myLean }` |
 | `room:leave` | — | `{ ok }` |
 | `seat:claim` | `{ side: 'pro' \| 'con' }` | `{ ok, role }` |
 | `seat:release` | — | `{ ok, role: 'audience' }` |
 | `debate:message` | `{ text }` | `{ ok }` — seated debaters only |
 | `audience:message` | `{ text }` | `{ ok }` — anyone in the room |
+| `audience:lean` | `{ side: 'pro' \| 'con' }` | `{ ok, lean }` — no neutral value exists |
 | `debate:typing` | `{ isTyping }` | `{ ok }` — relayed from debaters only |
 
 Server → client pushes: `lobby:rooms` (array of room summaries), `room:state`
 (one summary), `debate:message`, `audience:message`, `debate:system`,
-`audience:system`, `debate:typing` `{ name, role, isTyping }`.
+`audience:system`, `debate:typing` `{ name, role, isTyping }`, `room:lean`
+`{ pro, con }`.
 
 Room summary: `{ id, topic, createdAt, proTaken, conTaken, proName, conName,
 audienceCount }`.
 
 Joining always lands you in the audience — seats are only ever claimed
 explicitly, including after a reconnect.
+
+Everyone in the audience starts neutral. `audience:lean` moves them onto a side,
+and they can keep swapping between the two for as long as the debate runs, but
+there is no message that puts them back on the fence: the handler only accepts
+`'pro'` or `'con'`, so neutral is unreachable by construction rather than by a
+client-side rule. Only members whose role is `audience` are counted, so a
+debater cannot pad the tally for their own side; their pick is kept and returns
+to the count if they step down.
 
 ## Design notes
 
@@ -123,6 +133,11 @@ prototype:
   fixed elements toggled by role, not markup rebuilt on each `room:state` — a
   rebuild would wipe whatever a debater was mid-way through typing whenever
   anyone joined or left.
+- **Class-name collision.** The gauge's neutral state is `.gauge.nocall`, not
+  `.gauge.empty`. `.empty` was already the lobby's "no debates yet" placeholder,
+  carrying `padding: 52px 0`, and padding floors an element's used height, so the
+  15px gauge rendered 108px tall and its two fills collapsed to zero. Even an
+  inline `height: 15px !important` could not shrink it.
 - **Scroll.** New messages only auto-scroll when the reader is already within
   80px of the bottom, so scrolling back through history isn't hijacked.
 - **`localStorage`.** Name persistence is wrapped in try/catch; sandboxed embeds
