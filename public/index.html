@@ -154,11 +154,27 @@
     text-transform: uppercase;
     white-space: nowrap;
   }
-  /* Half the wordmark is a cut-out block. */
+  /* Half the wordmark is a cut-out block. Same trap as the headline cut: as a
+     plain inline box its background is the font's own content area, and the
+     condensed faces in the stack put their ascent right on the cap line — so
+     the block sat 1px off the tops of LIVE and 8px clear underneath, reading
+     as sliced. Own leading plus em padding, weighted to the top, centres the
+     word in the block without growing it. */
   .logo span {
+    display: inline-block;
     background: var(--neon-deep);
     color: #fff;
-    padding: 1px 7px;
+    line-height: .9;
+    padding: .22em 7px .04em;
+  }
+  /* Where the browser can trim the box to the cap line and the baseline, the
+     font's own ascent stops mattering and the padding below is literally the
+     gap you see — same block, evenly cut, on any face in the stack. */
+  @supports (text-box: trim-both cap alphabetic) {
+    .logo span {
+      text-box: trim-both cap alphabetic;
+      padding: .2em 7px .15em;
+    }
   }
   /* One live signal, inside the wordmark. Not a second badge next to it. */
   .logo span::after {
@@ -225,7 +241,16 @@
     background: var(--paper);
     color: var(--ink);
     line-height: 1;
-    padding: .16em 10px .08em;
+    /* No descenders in "a side.", so on browsers without box trimming the
+       font's own descent is all the room the underside needs — padding there
+       just reads as slack. */
+    padding: .16em 10px 0;
+  }
+  @supports (text-box: trim-both cap alphabetic) {
+    .lobby-inner h1 .w2 {
+      text-box: trim-both cap alphabetic;
+      padding: .16em 10px .12em;
+    }
   }
   /* cut 3 — outlined, tilted, on its own line */
   /* Neon tube. An outline stroke traces the glyph shape, so on a bold weight
