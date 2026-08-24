@@ -215,11 +215,17 @@
   /* cut 1 — plain, oversized */
   .lobby-inner h1 .w1 { font-size: 66px; }
   /* cut 2 — inverted block, straight */
+  /* The h1 runs on .92 leading, which pulls this inline-block's content box
+     down to (or below) the cap line on the narrower fonts in the stack — the
+     paper then reads as sliced off across the top of the letters. Give the cut
+     its own leading and a little vertical padding, in em so the phone size
+     scales with it, and the block clears the caps whichever font wins. */
   .lobby-inner h1 .w2 {
     font-size: 66px;
     background: var(--paper);
     color: var(--ink);
-    padding: 0 10px;
+    line-height: 1;
+    padding: .16em 10px .08em;
   }
   /* cut 3 — outlined, tilted, on its own line */
   /* Neon tube. An outline stroke traces the glyph shape, so on a bold weight
