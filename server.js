@@ -1011,6 +1011,13 @@ const server = http.createServer((req, res) => {
     docRoot = HOME_DIR;
     urlPath = '/';
   }
+  // The arena lives under the umbrella: comradecoding.com/arena is the app,
+  // no subdomain required. The app is one self-contained file and its socket
+  // connects by host alone, so it serves from any path unchanged.
+  if (urlPath === '/arena' || urlPath === '/arena/') {
+    docRoot = PUBLIC_DIR;
+    urlPath = '/';
+  }
 
   if (urlPath === '/') urlPath = '/index.html';
 

@@ -284,6 +284,30 @@ Files are never deleted. An archive that quietly dropped old debates would break
 exactly the permalinks it exists to keep, so disk grows without limit by design.
 Only the in-memory lobby index is capped, at 200.
 
+## The mothership
+
+One server carries two sites, routed on the Host header. `comradecoding.com`
+and `www` serve the ComradeCoding homepage from `homesite/`; every other host,
+including the railway domain, serves the app. Two paths cut across the split so
+both sites are reachable from anywhere: `/home` is the homepage on any host,
+and `/arena` is the app on any host, which is what puts MasterDebater at
+`comradecoding.com/arena` without spending a domain slot on a subdomain. The
+`/d/` permalinks sit above the split entirely, so a settled debate shares from
+either domain.
+
+The homepage is one file, no images and no script, served under
+`script-src 'none'`. It is a Geocities pastiche done honestly: the animations
+run on `steps()` so they flicker like 8-frame GIFs, the marquee tags are real,
+and the table layout is load-bearing on purpose.
+
+`HOME_HOSTS` overrides the routed hostnames, comma-separated, if the umbrella
+ever moves.
+
+Railway's plan allows two custom domains per service, which root and `www`
+occupy. A `debate.` subdomain would need one of them deleted in the dashboard
+first (the API can only detach a domain from a service, not delete the domain
+object), or a plan upgrade. `/arena` made that unnecessary.
+
 ## Deployment
 
 Live at https://masterdebater-live-production.up.railway.app

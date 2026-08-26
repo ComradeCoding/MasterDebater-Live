@@ -598,6 +598,14 @@ async function runHomesite() {
   check('/home serves the homepage from any host',
     byPath.status === 200 && byPath.body.includes('COMRADECODING.COM'), String(byPath.status));
 
+  // The arena under the umbrella: the app is reachable at /arena on the home
+  // host, so MasterDebater is hosted at comradecoding.com/arena with no
+  // subdomain needed.
+  const arena = await rawGet('/arena', 'comradecoding.com');
+  check('/arena serves the app on the home host',
+    arena.status === 200 && arena.body.includes('MasterDebater <span>Live</span>'),
+    String(arena.status));
+
   // The two roots must not bleed into each other.
   const cross = await rawGet('/../public/index.html', 'comradecoding.com');
   check('the homepage root cannot reach the app root', cross.status !== 200, String(cross.status));
