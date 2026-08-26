@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ComradeCoding.com | The People's Republic of Code</title>
+<meta name="description" content="Workers of the world wide web, unite! Home of MasterDebater Live and other five year plans.">
+<style>
+  /* -------------------------------------------------------------------------
+     ComradeCoding.com, est. 1997 (in spirit).
+
+     A Geocities homepage, rebuilt with modern CSS wearing period clothing.
+     Every animation runs on steps() so it flickers like an 8-frame GIF
+     instead of tweening like it was made after 2003. No images ship with
+     this page: the "clip art" is unicode, borders, and gradients, so the
+     whole site is one file and loads like it is 1999 on a good day.
+  ------------------------------------------------------------------------- */
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background-color: #200000;
+    /* Tiled starfield. The People's night sky. */
+    background-image:
+      radial-gradient(1px 1px at 12px 18px, #ffcc00 50%, transparent 51%),
+      radial-gradient(1px 1px at 60px 44px, #fff 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 100px 12px, #ffcc00 50%, transparent 51%),
+      radial-gradient(1px 1px at 34px 70px, #fff 50%, transparent 51%),
+      radial-gradient(1px 1px at 86px 82px, #ff5555 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 118px 60px, #fff 50%, transparent 51%);
+    background-size: 130px 100px;
+    color: #ffffff;
+    font-family: "Comic Sans MS", "Comic Sans", cursive;
+    text-align: center;
+  }
+
+  /* Blink is dead, long live blink. */
+  .blink { animation: blink 1s steps(2, start) infinite; }
+  @keyframes blink { to { visibility: hidden; } }
+
+  a { color: #ffcc00; }
+  a:visited { color: #cc88ff; }
+  a:hover { color: #ff4444; }
+
+  .wrap { width: 780px; max-width: 96vw; margin: 0 auto; }
+
+  /* ------------------------------------------------------------- banner -- */
+
+  .topbar {
+    background: #cc0000;
+    color: #ffcc00;
+    font-weight: bold;
+    font-size: 15px;
+    letter-spacing: 1px;
+    padding: 4px 0;
+    border-top: 3px ridge #ffcc00;
+    border-bottom: 3px ridge #ffcc00;
+  }
+
+  /* Spins in 8 chunky frames, like the GIF it wishes it was. */
+  .sickle {
+    display: inline-block;
+    font-size: 96px;
+    color: #ffcc00;
+    text-shadow: 3px 3px 0 #660000, 0 0 18px #ff3300;
+    animation: spin 2.4s steps(8) infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  h1 {
+    font-family: Impact, "Arial Black", sans-serif;
+    font-size: 54px;
+    margin: 8px 0 0;
+    letter-spacing: 2px;
+    color: #ffcc00;
+    text-shadow: 2px 2px 0 #cc0000, 4px 4px 0 #440000;
+    /* The flame flicker: two shadow states, hard cut between them. */
+    animation: flames .5s steps(2) infinite;
+  }
+  @keyframes flames {
+    50% { text-shadow: 2px 2px 0 #ff3300, 4px 4px 0 #660000, 0 -6px 12px #ff6600; }
+  }
+
+  .tagline {
+    font-size: 18px;
+    color: #ffffff;
+    margin: 4px 0 14px;
+  }
+
+  /* ------------------------------------------- under construction, forever */
+
+  .construction {
+    height: 22px;
+    margin: 12px auto;
+    background: repeating-linear-gradient(45deg, #ffcc00 0 16px, #111 16px 32px);
+    border: 2px solid #000;
+    position: relative;
+  }
+  .construction span {
+    position: absolute;
+    inset: 0;
+    line-height: 22px;
+    font-family: Arial, sans-serif;
+    font-weight: bold;
+    font-size: 12px;
+    color: #fff;
+    background: rgba(0,0,0,.55);
+  }
+
+  /* ------------------------------------------------------------ the table */
+  /* Beveled like a Pentium-era button. Table-based layout is the point. */
+
+  table.layout {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 6px;
+    background: #550000;
+    border: 4px outset #cc0000;
+    margin: 10px 0;
+  }
+  td.nav, td.main {
+    background: #330000;
+    border: 3px inset #883333;
+    padding: 12px;
+    vertical-align: top;
+    text-align: left;
+    font-size: 14px;
+  }
+  td.nav { width: 190px; text-align: center; }
+  td.nav h3, td.main h3 {
+    font-family: Impact, "Arial Black", sans-serif;
+    letter-spacing: 1px;
+    color: #ffcc00;
+    background: #cc0000;
+    border: 2px outset #ff6666;
+    margin: 0 0 10px;
+    padding: 4px;
+    text-align: center;
+    font-size: 16px;
+  }
+  td.nav ul { list-style: none; margin: 0; padding: 0; }
+  td.nav li { margin: 9px 0; font-weight: bold; }
+
+  /* Rocks side to side in 4 frames. NEW!! since 1998. */
+  .starburst {
+    display: inline-block;
+    background: #ffcc00;
+    color: #cc0000;
+    font-family: Arial, sans-serif;
+    font-weight: bold;
+    font-size: 11px;
+    padding: 4px 7px;
+    border-radius: 50%;
+    border: 2px solid #cc0000;
+    transform: rotate(-12deg);
+    animation: wobble .6s steps(4) infinite;
+  }
+  @keyframes wobble {
+    0%   { transform: rotate(-12deg) scale(1); }
+    50%  { transform: rotate(10deg) scale(1.12); }
+    100% { transform: rotate(-12deg) scale(1); }
+  }
+
+  .feature {
+    border: 3px double #ffcc00;
+    background: #440000;
+    padding: 12px;
+    margin: 12px 0;
+    text-align: center;
+  }
+  .feature .go {
+    display: inline-block;
+    font-family: Impact, "Arial Black", sans-serif;
+    font-size: 22px;
+    letter-spacing: 1px;
+    color: #fff;
+    background: #cc0000;
+    border: 4px outset #ff6666;
+    padding: 8px 22px;
+    text-decoration: none;
+    margin-top: 8px;
+  }
+  .feature .go:hover { border-style: inset; color: #ffcc00; }
+
+  .plan { text-align: left; margin: 0; padding-left: 8px; list-style: none; }
+  .plan li { margin: 6px 0; }
+
+  /* -------------------------------------------------------------- badges -- */
+  /* The sacred 88x31 button wall, hand made. */
+
+  .badges { margin: 14px 0; }
+  .badge {
+    display: inline-block;
+    width: 88px;
+    height: 31px;
+    line-height: 1.1;
+    margin: 3px;
+    padding-top: 4px;
+    font-family: Arial, sans-serif;
+    font-size: 9px;
+    font-weight: bold;
+    vertical-align: middle;
+    border: 2px outset #999;
+    color: #fff;
+    background: #222;
+  }
+  .badge.b1 { background: #003399; }
+  .badge.b2 { background: #006600; }
+  .badge.b3 { background: #000; color: #33ff33; font-family: "Courier New", monospace; }
+  .badge.b4 { background: #cc0000; color: #ffcc00; }
+  .badge.b5 { background: #444; }
+
+  /* ------------------------------------------------------------- counter -- */
+
+  .counter {
+    display: inline-block;
+    background: #000;
+    border: 3px inset #777;
+    padding: 4px 8px;
+    font-family: "Courier New", monospace;
+    font-size: 22px;
+    font-weight: bold;
+    color: #33ff33;
+    letter-spacing: 6px;
+  }
+
+  .webring {
+    border: 2px dashed #ffcc00;
+    background: #3a0000;
+    display: inline-block;
+    padding: 8px 18px;
+    font-size: 13px;
+    margin: 12px 0;
+  }
+
+  hr.divider {
+    border: 0;
+    height: 4px;
+    background: repeating-linear-gradient(90deg, #ffcc00 0 12px, #cc0000 12px 24px);
+    margin: 18px 0;
+  }
+
+  .footer {
+    font-size: 11px;
+    color: #dd9999;
+    padding: 10px 0 30px;
+  }
+
+  marquee { display: block; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; }
+    marquee { overflow: hidden; }
+  }
+  @media (max-width: 640px) {
+    table.layout, td.nav, td.main { display: block; width: 100%; }
+    h1 { font-size: 34px; }
+    .sickle { font-size: 64px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <marquee scrollamount="6">&#9733; WORKERS OF THE WORLD WIDE WEB, UNITE! &#9733; YOU HAVE NOTHING TO LOSE BUT YOUR DIAL-UP CONNECTION! &#9733; NOW SERVING THE GLORIOUS INTERNET SINCE 1997 &#9733;</marquee>
+</div>
+
+<div class="wrap">
+
+  <div><span class="sickle">&#9773;</span></div>
+  <h1>COMRADECODING.COM</h1>
+  <div class="tagline">The People's Republic of Code</div>
+  <div class="blink" style="color:#ff4444; font-weight:bold; font-size:17px;">&#9733; SEIZE THE MEANS OF COMPUTATION &#9733;</div>
+
+  <div class="construction"><span>&#9888; THIS SITE IS UNDER PERMANENT CONSTRUCTION, AS ALL GREAT WORKS ARE &#9888;</span></div>
+
+  <table class="layout">
+    <tr>
+      <td class="nav">
+        <h3>POLITBURO<br>NAVIGATION</h3>
+        <ul>
+          <li>&#9773; <a href="/home">Home Soviet</a></li>
+          <li>&#9876; <a href="https://masterdebater-live-production.up.railway.app">MasterDebater&nbsp;Live</a> <span class="starburst">NEW!!</span></li>
+          <li>&#128220; <a href="#manifesto">The Manifesto</a></li>
+          <li>&#128197; <a href="#plan">Five Year Plan</a></li>
+          <li>&#128221; <a href="#guestbook">Guestbook</a></li>
+          <li>&#128279; <a href="#webring">Webring</a></li>
+        </ul>
+        <hr class="divider">
+        <div style="font-size:11px;">
+          Best viewed in<br><b>Netscape Navigator 4.0</b><br>at 800x600<br>with solidarity
+        </div>
+      </td>
+      <td class="main">
+        <h3>&#9733; WELCOME, COMRADE &#9733;</h3>
+        <p>You have reached the official homepage of <b>ComradeCoding</b>, the
+        internet's foremost collective of one. Here the code belongs to
+        everyone, the bugs are distributed equally among the proletariat, and
+        every merge is a merge of the people.</p>
+
+        <p>Private property? We barely tolerate <i>private methods</i>.</p>
+
+        <div class="feature">
+          <span class="starburst">NEW!!</span>
+          <h3 style="margin-top:8px;">&#9876; MASTERDEBATER LIVE &#9876;</h3>
+          <p style="margin:6px 0;">The state-approved argument arena. Two comrades
+          enter the stage, the audience records where it stands before reading a
+          word, and when the clock runs out the side that <b>moved the room</b>
+          is declared correct by the will of the people. Every settled debate
+          receives a permanent page in the archives, where it will remain for
+          the historians.</p>
+          <a class="go" href="https://masterdebater-live-production.up.railway.app">ENTER THE ARENA &#9755;</a>
+          <div style="font-size:11px; margin-top:6px;">(soon reporting for duty at debate.comradecoding.com)</div>
+        </div>
+
+        <h3 id="manifesto">&#128220; THE MANIFESTO</h3>
+        <p style="text-align:left;">A spectre is haunting the internet: the
+        spectre of dependencies. All previously existing websites ship three
+        hundred megabytes of node_modules to render a paragraph. We reject this
+        decadence. Our pages are hand-forged HTML, built with zero packages,
+        zero trackers, and zero venture capital. From each codebase according
+        to its ability, to each visitor according to their bandwidth.</p>
+
+        <h3 id="plan">&#128197; THE FIVE YEAR PLAN</h3>
+        <ul class="plan">
+          <li>&#9745; Year one: the debate stage rises</li>
+          <li>&#9745; Year two: the people record their verdicts</li>
+          <li>&#9745; Year three: every settled debate archived for the historians</li>
+          <li>&#9745; Year four: turns and the clock impose glorious order</li>
+          <li>&#9744; Year five: a tireless machine comrade takes the empty seat</li>
+        </ul>
+        <p style="font-size:12px;">The plan is ahead of schedule. The plan has always been ahead of schedule.</p>
+      </td>
+    </tr>
+  </table>
+
+  <div class="badges">
+    <span class="badge b1">NETSCAPE<br>NOW!</span>
+    <span class="badge b2">MADE WITH<br>NOTEPAD</span>
+    <span class="badge b3">Y2K<br>COMPLIANT</span>
+    <span class="badge b4">&#9773; 100%<br>ARTISANAL HTML</span>
+    <span class="badge b5">NO COOKIES<br>(SHARED EQUALLY)</span>
+  </div>
+
+  <div>
+    You are citizen number
+    <span class="counter">0042917</span>
+    to be served by the collective
+  </div>
+
+  <div id="webring" class="webring">
+    &#128279; <b>The Marxist-Leninist Webring</b> &#128279;<br>
+    [ <a href="/home">&#9756; PREV</a> |
+    <a href="/home">RANDOM</a> |
+    <a href="/home">NEXT &#9758;</a> ]<br>
+    <span style="font-size:10px;">(the ring is currently one site; the revolution starts somewhere)</span>
+  </div>
+
+  <div id="guestbook" style="margin:10px 0;">
+    <b>&#128221; GUESTBOOK:</b> temporarily collectivized.
+    <span class="blink">Sign it by joining a debate.</span>
+  </div>
+
+  <marquee scrollamount="4" style="color:#ffcc00; font-size:13px;">&#9835; now playing: internationale.mid (8kb, worth the wait) &#9835;</marquee>
+
+  <hr class="divider">
+
+  <div class="footer">
+    &copy; 1997-2026 The Collective. No rights reserved; property is theft.<br>
+    This page was hand-typed by the workers of ComradeCoding and weighs less than one banner ad.<br>
+    <a href="https://masterdebater-live-production.up.railway.app">MasterDebater Live</a> is a ComradeCoding production.
+  </div>
+
+</div>
+
+</body>
+</html>

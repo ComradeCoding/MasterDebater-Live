@@ -917,6 +917,20 @@ const handlers = {
 // ===========================================================================
 
 const PUBLIC_DIR = path.resolve(__dirname, 'public');
+
+// The mothership. One server carries two sites: the bare domain serves the
+// ComradeCoding homepage, every other host serves the app. Routed on the Host
+// header because that is what actually distinguishes the two in production,
+// where debate.comradecoding.com and the railway domain both point here.
+// `/home` serves the same page on any host, so it works before DNS exists and
+// gives the app a same-origin path to link back to.
+const HOME_DIR = path.resolve(__dirname, 'homesite');
+const HOME_HOSTS = new Set(
+  (process.env.HOME_HOSTS || 'comradecoding.com,www.comradecoding.com')
+    .split(',').map((h) => h.trim().toLowerCase()).filter(Boolean)
+);
+const hostOf = (req) => String(req.headers.host || '').toLowerCase().split(':')[0];
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -988,12 +1002,22 @@ const server = http.createServer((req, res) => {
     return res.end(req.method === 'HEAD' ? undefined : body);
   }
 
+  // --- which site? ---------------------------------------------------------
+  // The bare domain gets the homepage; `/home` gets it on any host. Permalinks
+  // stay above this split, so an archived debate shares from either domain.
+  let docRoot = PUBLIC_DIR;
+  if (HOME_HOSTS.has(hostOf(req))) docRoot = HOME_DIR;
+  if (urlPath === '/home' || urlPath === '/home/') {
+    docRoot = HOME_DIR;
+    urlPath = '/';
+  }
+
   if (urlPath === '/') urlPath = '/index.html';
 
-  // Resolve, then confirm we never escaped public/. `..`, absolute paths and
-  // sibling directories like `publicX` all fail this check.
-  const filePath = path.resolve(PUBLIC_DIR, '.' + path.posix.normalize(urlPath));
-  if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + path.sep)) {
+  // Resolve, then confirm we never escaped the chosen root. `..`, absolute
+  // paths and sibling directories like `publicX` all fail this check.
+  const filePath = path.resolve(docRoot, '.' + path.posix.normalize(urlPath));
+  if (filePath !== docRoot && !filePath.startsWith(docRoot + path.sep)) {
     res.writeHead(403);
     return res.end('Forbidden');
   }
@@ -1001,7 +1025,9 @@ const server = http.createServer((req, res) => {
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
     res.writeHead(200, {
-      ...securityHeaders("'unsafe-inline'"),
+      // The homepage carries no script at all, so it runs under the permalink
+      // CSP; only the app page needs its one inline block allowed.
+      ...securityHeaders(docRoot === HOME_DIR ? "'none'" : "'unsafe-inline'"),
       'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
     });
     res.end(req.method === 'HEAD' ? undefined : data);

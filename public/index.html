@@ -385,6 +385,20 @@
     border: 2px dashed var(--rule-hot);
   }
 
+  /* The mothership credit. Quiet on purpose: one line of type at the bottom
+     of the lobby, in the same registers everything else uses. */
+  .mothership {
+    margin-top: 42px;
+    text-align: center;
+    font-family: var(--data);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+  }
+  .mothership a { color: var(--dim); text-decoration: none; }
+  .mothership a:hover { color: var(--neon); }
+
   /* ---------------------------------------------------------------- room -- */
 
   #room { flex: 1; display: none; min-height: 0; }
@@ -1020,6 +1034,7 @@
       <div id="roomList"></div>
     <div class="section-label" id="settledLabel" hidden>Settled</div>
       <div id="resultList"></div>
+    <div class="mothership"><a href="/home">&#9773; a ComradeCoding.com production</a></div>
   </div>
 </div>
 

@@ -554,6 +554,53 @@ async function runFormat() {
 
   [pro, con, watcher].forEach((c) => c.close());
   await wait(150);
+
+  await runHomesite();
+}
+
+// ==========================================================================
+// The mothership: Host-routed homepage
+// ==========================================================================
+// fetch() refuses to override the Host header, so these checks speak raw
+// http. That is also the honest test: production routing runs on exactly
+// this header.
+
+function rawGet(p, host) {
+  const http = require('http');
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: 'localhost', port: TEST_PORT, path: p, headers: host ? { Host: host } : {} },
+      (res) => {
+        let body = '';
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => resolve({ status: res.statusCode, body, csp: res.headers['content-security-policy'] }));
+      }
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function runHomesite() {
+  const home = await rawGet('/', 'comradecoding.com');
+  check('the bare domain serves the homepage',
+    home.status === 200 && home.body.includes('COMRADECODING.COM'), String(home.status));
+  check('www serves the homepage too',
+    (await rawGet('/', 'www.comradecoding.com')).body.includes('COMRADECODING.COM'));
+  check('the homepage runs no script', /script-src 'none'/.test(home.csp || ''), home.csp);
+  check('the homepage links to MasterDebater', /masterdebater/i.test(home.body));
+
+  const app = await rawGet('/', 'debate.comradecoding.com');
+  check('any other host still serves the app',
+    app.status === 200 && app.body.includes('MasterDebater <span>Live</span>'), String(app.status));
+
+  const byPath = await rawGet('/home', 'debate.comradecoding.com');
+  check('/home serves the homepage from any host',
+    byPath.status === 200 && byPath.body.includes('COMRADECODING.COM'), String(byPath.status));
+
+  // The two roots must not bleed into each other.
+  const cross = await rawGet('/../public/index.html', 'comradecoding.com');
+  check('the homepage root cannot reach the app root', cross.status !== 200, String(cross.status));
 }
 
 (async () => {
