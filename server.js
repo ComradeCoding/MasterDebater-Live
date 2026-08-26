@@ -29,6 +29,7 @@ const path = require('path');
 const { computeVerdict, verdictLine } = require('./verdict');
 const archive = require('./archive');
 const resultpage = require('./resultpage');
+const format = require('./format');
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -300,6 +301,11 @@ const store = (() => {
         // rather than by connection, so a reconnect resumes the same ballot
         // instead of filing a second one with a post-persuasion "entry".
         ballots: new Map(),
+        // The floor. index -1 means the format has not been started and the
+        // stage is still a free-for-all, which is what a room is before anyone
+        // calls it to order.
+        turn: { index: -1, endsAt: 0, remainingMs: 0, paused: false, pausedReason: null, over: false },
+        turnTimer: null,
         reapTimer: null,
       };
       rooms.set(id, room);
@@ -466,6 +472,9 @@ function leaveRoom(client) {
 
   if (wasSeated) {
     store.freeSeat(room, client.role);
+    // A debater walking out stops the clock rather than running it down for the
+    // side still in the room. Losing your connection is not a concession.
+    pauseTurn(room, `the ${client.role.toUpperCase()} seat is empty`);
     broadcastRoom(room, 'debate:system', {
       text: `${client.name} left the ${client.role.toUpperCase()} seat`,
       ts: Date.now(),
@@ -482,6 +491,167 @@ function leaveRoom(client) {
 
   publishRoom(room);
   store.scheduleReap(room, broadcastLobby);
+}
+
+// ---------------------------------------------------------------------------
+// The clock
+// ---------------------------------------------------------------------------
+// One timer per room rather than one interval scanning every room. A debate
+// spends most of its life with nothing due, and a global tick would wake up
+// hundreds of times a minute to discover exactly that.
+
+function clearTurnTimer(room) {
+  if (room.turnTimer) {
+    clearTimeout(room.turnTimer);
+    room.turnTimer = null;
+  }
+}
+
+function armTurnTimer(room, ms) {
+  clearTurnTimer(room);
+  room.turnTimer = setTimeout(() => {
+    room.turnTimer = null;
+    // Re-check rather than trust the timer: the room may have been settled,
+    // paused, or advanced by a pass between arming and firing.
+    if (room.status === 'concluded' || room.turn.paused || room.turn.index < 0) return;
+    const t = format.turnAt(room.turn.index);
+    if (t) {
+      broadcastRoom(room, 'debate:system', {
+        text: `${t.side.toUpperCase()} is out of time`,
+        ts: Date.now(),
+      });
+    }
+    advanceTurn(room);
+  }, Math.max(0, ms));
+  if (room.turnTimer.unref) room.turnTimer.unref();
+}
+
+function publishTurn(room) {
+  broadcastRoom(room, 'debate:turn', format.turnState(room));
+}
+
+function beginTurn(room, index) {
+  const t = format.turnAt(index);
+  if (!t) return endFormat(room);
+
+  room.turn.index = index;
+  room.turn.paused = false;
+  room.turn.pausedReason = null;
+  room.turn.remainingMs = t.seconds * 1000;
+  room.turn.endsAt = Date.now() + room.turn.remainingMs;
+
+  broadcastRoom(room, 'debate:system', {
+    text: `${t.round}: ${t.side.toUpperCase()} has the floor`,
+    ts: Date.now(),
+  });
+  // The floor changing hands clears any stale typing line from the side that
+  // just lost it, which would otherwise sit there for its full five seconds.
+  broadcastRoom(room, 'debate:typing', { name: '', role: t.side, isTyping: false });
+  publishTurn(room);
+  armTurnTimer(room, room.turn.remainingMs);
+}
+
+function advanceTurn(room) {
+  clearTurnTimer(room);
+  if (format.isLastTurn(room.turn.index)) return endFormat(room);
+  beginTurn(room, room.turn.index + 1);
+}
+
+// The format running out settles the debate by itself. A debate that went the
+// full distance should not also need somebody to remember to press a button.
+function endFormat(room) {
+  clearTurnTimer(room);
+  room.turn.index = -1;
+  room.turn.over = true;
+  publishTurn(room);
+
+  const settled = settleRoom(room, 'The format ran its course. The debate is settled.');
+  if (settled.error) {
+    // Nothing was written, so the room stays live and callable by hand. This is
+    // reachable: a debater can walk out during the closing round, leaving a
+    // seat empty and the transcript one-sided.
+    broadcastRoom(room, 'debate:system', {
+      text: `Format over, but it cannot be settled: ${settled.error}`,
+      ts: Date.now(),
+    });
+  }
+}
+
+// Pausing rather than forfeiting. A dropped connection is not a concession, and
+// the reconnect path already brings people back within seconds.
+function pauseTurn(room, reason) {
+  if (room.turn.index < 0 || room.turn.paused) return;
+  clearTurnTimer(room);
+  room.turn.remainingMs = Math.max(0, room.turn.endsAt - Date.now());
+  room.turn.paused = true;
+  room.turn.pausedReason = reason;
+  broadcastRoom(room, 'debate:system', { text: `Clock stopped: ${reason}`, ts: Date.now() });
+  publishTurn(room);
+}
+
+function resumeTurn(room) {
+  if (room.turn.index < 0 || !room.turn.paused) return;
+  if (!room.seats.pro || !room.seats.con) return; // still a seat short
+  room.turn.paused = false;
+  room.turn.pausedReason = null;
+  room.turn.endsAt = Date.now() + room.turn.remainingMs;
+  broadcastRoom(room, 'debate:system', { text: 'Clock running', ts: Date.now() });
+  publishTurn(room);
+  armTurnTimer(room, room.turn.remainingMs);
+}
+
+// ---------------------------------------------------------------------------
+// Settling
+// ---------------------------------------------------------------------------
+// Shared by the button and by the clock, so a debate that ran its course and one
+// that was called early produce byte-identical records.
+
+function settleRoom(room, systemText) {
+  if (room.status === 'concluded') return { error: 'Already settled.' };
+  if (!room.seats.pro || !room.seats.con) {
+    return { error: 'Both seats have to be filled before this counts.' };
+  }
+  // A verdict drawn from a one-sided transcript is not a verdict. Without this
+  // a debater could open, post once, and bank a "win" against silence.
+  const spoke = new Set(room.debateMessages.map((m) => m.role));
+  if (!spoke.has('pro') || !spoke.has('con')) {
+    return { error: 'Both sides need to make a case first.' };
+  }
+
+  const verdict = computeVerdict(store.listBallots(room));
+  const record = {
+    version: 1,
+    id: room.id,
+    topic: room.topic,
+    createdAt: room.createdAt,
+    concludedAt: Date.now(),
+    pro: { name: room.seats.pro.name },
+    con: { name: room.seats.con.name },
+    verdict,
+    // Written into the record rather than derived twice. The live result card
+    // and the permalink must never describe the same debate differently, and
+    // the surest way to guarantee that is for there to be one sentence.
+    headline: verdictLine(verdict, room.seats.pro.name, room.seats.con.name),
+    debateMessages: room.debateMessages,
+    audienceMessages: room.audienceMessages,
+  };
+
+  // Archive first: if the write fails, the room stays live and callable rather
+  // than ending in a state whose permalink 404s.
+  try {
+    archive.save(record);
+  } catch (err) {
+    console.error('archive failed:', err);
+    return { error: 'Could not save the record. Nothing was lost. Try again.' };
+  }
+
+  clearTurnTimer(room);
+  store.conclude(room, record);
+  broadcastRoom(room, 'debate:system', { text: systemText, ts: record.concludedAt });
+  broadcastRoom(room, 'room:concluded', { result: record, url: `/d/${room.id}` });
+  publishRoom(room);
+  broadcastResults();
+  return { ok: true, result: record, url: `/d/${room.id}` };
 }
 
 const handlers = {
@@ -543,6 +713,9 @@ const handlers = {
       // Echoed back so a returning voter sees their original stance, not the
       // one they just picked in a modal the server ignored.
       myEntry: ballot ? ballot.entry : null,
+      // Late arrivals and reconnects need the clock, not just the history. The
+      // remaining time is computed at send, so it is correct on arrival.
+      turn: format.turnState(room),
     };
   },
 
@@ -568,6 +741,10 @@ const handlers = {
     const ballot = store.getBallot(room, client.voterId);
     if (ballot) ballot.seated = true;
 
+    // A seat refilling restarts a clock that was stopped waiting for exactly
+    // this. The replacement inherits whatever time was left, not a fresh turn.
+    resumeTurn(room);
+
     broadcastRoom(room, 'debate:system', {
       text: `${client.name} takes the ${side.toUpperCase()} side`,
       ts: Date.now(),
@@ -585,6 +762,7 @@ const handlers = {
     const side = client.role;
     store.freeSeat(room, side);
     client.role = 'audience';
+    pauseTurn(room, `the ${side.toUpperCase()} seat is empty`);
 
     broadcastRoom(room, 'debate:system', {
       text: `${client.name} left the ${side.toUpperCase()} seat`,
@@ -602,6 +780,15 @@ const handlers = {
     if (room.status === 'concluded') return { error: 'This debate is settled.' };
     if (client.role !== 'pro' && client.role !== 'con') {
       return { error: 'Take a seat if you want to argue.' };
+    }
+    // Before the room is called to order the stage is open, which is what the
+    // app was entirely. Once a format is running the floor is the gate.
+    if (room.turn.index >= 0) {
+      if (room.turn.paused) return { error: 'The clock is stopped.' };
+      const current = format.turnAt(room.turn.index);
+      if (current && client.role !== current.side) {
+        return { error: `${current.side.toUpperCase()} has the floor. Wait your turn.` };
+      }
     }
     text = clean(text, MAX_MSG_LEN);
     if (!text) return { error: 'Say something first.' };
@@ -658,60 +845,61 @@ const handlers = {
 
   // Either debater can call it. Requiring both to agree would hand the loser a
   // veto, and a debate nobody can end is the state this app was already in.
+  //
+  // With a format running this is the early exit. The last turn ending settles
+  // the debate on its own, so a full debate needs nobody to press anything.
   'debate:conclude'(client) {
     const room = client.room;
     if (!room) return { error: 'Join a debate first.' };
     if (client.role !== 'pro' && client.role !== 'con') {
       return { error: 'Only the two debaters can call it.' };
     }
-    if (room.status === 'concluded') return { error: 'Already settled.' };
+    return settleRoom(room, `${client.name} called it. The debate is settled.`);
+  },
+
+  // Calling the room to order. Either debater can do it, and until one does the
+  // stage stays open, which is what a room is before a debate starts: people
+  // turning up, testing the mic, arguing loosely.
+  'debate:start'(client) {
+    const room = client.room;
+    if (!room) return { error: 'Join a debate first.' };
+    if (room.status === 'concluded') return { error: 'This debate is settled.' };
+    if (client.role !== 'pro' && client.role !== 'con') {
+      return { error: 'Only the two debaters can start it.' };
+    }
+    if (room.turn.index >= 0) return { error: 'Already under way.' };
+    if (room.turn.over) return { error: 'The format has already run.' };
     if (!room.seats.pro || !room.seats.con) {
-      return { error: 'Both seats have to be filled before this counts.' };
-    }
-    // A verdict drawn from a one-sided transcript is not a verdict. Without
-    // this a debater could open, post once, and bank a "win" against silence.
-    const spoke = new Set(room.debateMessages.map((m) => m.role));
-    if (!spoke.has('pro') || !spoke.has('con')) {
-      return { error: 'Both sides need to make a case first.' };
+      return { error: 'Both seats have to be filled first.' };
     }
 
-    const verdict = computeVerdict(store.listBallots(room));
-    const record = {
-      version: 1,
-      id: room.id,
-      topic: room.topic,
-      createdAt: room.createdAt,
-      concludedAt: Date.now(),
-      concludedBy: client.role,
-      pro: { name: room.seats.pro.name },
-      con: { name: room.seats.con.name },
-      verdict,
-      // Written into the record rather than derived twice. The live result card
-      // and the permalink must never describe the same debate differently, and
-      // the surest way to guarantee that is for there to be one sentence.
-      headline: verdictLine(verdict, room.seats.pro.name, room.seats.con.name),
-      debateMessages: room.debateMessages,
-      audienceMessages: room.audienceMessages,
-    };
-
-    // Archive first: if the write fails, the room stays live and callable
-    // rather than ending in a state whose permalink 404s.
-    try {
-      archive.save(record);
-    } catch (err) {
-      console.error('archive failed:', err);
-      return { error: 'Could not save the record. Nothing was lost. Try again.' };
-    }
-
-    store.conclude(room, record);
     broadcastRoom(room, 'debate:system', {
-      text: `${client.name} called it. The debate is settled.`,
-      ts: record.concludedAt,
+      text: `${client.name} called the room to order`,
+      ts: Date.now(),
     });
-    broadcastRoom(room, 'room:concluded', { result: record, url: `/d/${room.id}` });
-    publishRoom(room);
-    broadcastResults();
-    return { ok: true, result: record, url: `/d/${room.id}` };
+    beginTurn(room, 0);
+    return { ok: true, turn: format.turnState(room) };
+  },
+
+  // Yielding early. The clock would take the floor anyway, so this only ever
+  // hands the other side more time than they were owed.
+  'debate:pass'(client) {
+    const room = client.room;
+    if (!room) return { error: 'Join a debate first.' };
+    if (room.status === 'concluded') return { error: 'This debate is settled.' };
+    if (room.turn.index < 0) return { error: 'The debate has not started.' };
+    if (room.turn.paused) return { error: 'The debate is paused.' };
+
+    const current = format.turnAt(room.turn.index);
+    if (!current || client.role !== current.side) {
+      return { error: 'You do not have the floor.' };
+    }
+    broadcastRoom(room, 'debate:system', {
+      text: `${client.name} yields the floor`,
+      ts: Date.now(),
+    });
+    advanceTurn(room);
+    return { ok: true };
   },
 
   'debate:typing'(client, { isTyping } = {}) {

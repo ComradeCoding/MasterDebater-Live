@@ -99,7 +99,7 @@ function makeClient(label) {
 async function startServer() {
   if (!SPAWN_SERVER) return null;
   const proc = spawn(process.execPath, [path.join(__dirname, 'server.js')], {
-    env: { ...process.env, PORT: String(TEST_PORT), ARCHIVE_DIR },
+    env: { ...process.env, PORT: String(TEST_PORT), ARCHIVE_DIR, DEBATE_TURN_SECONDS: '1' },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   await new Promise((resolve, reject) => {
@@ -431,6 +431,128 @@ async function runVerdict() {
     !page.body.includes('<script>alert'), 'raw markup reached the page');
 
   [pro, con, v1, v2, v3, v4].forEach((c) => c.close());
+  await wait(150);
+
+  await runFormat();
+}
+
+// ==========================================================================
+// The format: turns, the clock, and the floor
+// ==========================================================================
+// The server is spawned with DEBATE_TURN_SECONDS=1, so a full six-turn format
+// runs in six seconds instead of thirteen minutes.
+
+async function runFormat() {
+  const pro = makeClient('fpro');
+  const con = makeClient('fcon');
+  const watcher = makeClient('fwatch');
+  await Promise.all([pro.open, con.open, watcher.open]);
+
+  const { roomId } = await pro.emit('room:create', { topic: 'Juries should be abolished' });
+  await pro.emit('room:join', { roomId, name: 'Ines', stance: 'pro', voterId: 'g-pro' });
+  await con.emit('room:join', { roomId, name: 'Tomas', stance: 'con', voterId: 'g-con' });
+  const wJoin = await watcher.emit('room:join', { roomId, name: 'Wren', stance: 'undecided', voterId: 'g-w' });
+
+  check('a room starts with no format running', wJoin.turn && wJoin.turn.started === false,
+    JSON.stringify(wJoin.turn));
+
+  await pro.emit('seat:claim', { side: 'pro' });
+
+  // --- starting -----------------------------------------------------------
+  const audienceStart = await watcher.emit('debate:start');
+  check('the audience cannot call the room to order', !!audienceStart.error);
+  const oneSeat = await pro.emit('debate:start');
+  check('cannot start with a seat still open', !!oneSeat.error, JSON.stringify(oneSeat));
+
+  // Before the format starts the stage is open, which is the old behaviour.
+  const warmup = await pro.emit('debate:message', { text: 'testing, testing' });
+  check('the stage is open before the room is called to order', !warmup.error,
+    JSON.stringify(warmup));
+
+  await con.emit('seat:claim', { side: 'con' });
+  const started = await con.emit('debate:start');
+  check('a seated debater can start it', !started.error, JSON.stringify(started));
+  check('PRO opens', started.turn && started.turn.side === 'pro' && started.turn.round === 'Opening',
+    JSON.stringify(started.turn));
+  check('the format is six turns', started.turn && started.turn.total === 6,
+    String(started.turn && started.turn.total));
+  const twice = await pro.emit('debate:start');
+  check('it cannot be started twice', !!twice.error);
+
+  // --- the floor is enforced ----------------------------------------------
+  const outOfTurn = await con.emit('debate:message', { text: 'let me in' });
+  check('the side without the floor cannot post', !!outOfTurn.error, JSON.stringify(outOfTurn));
+  const onTurn = await pro.emit('debate:message', { text: 'Twelve amateurs decide nothing well.' });
+  check('the side with the floor can post', !onTurn.error);
+  const again = await pro.emit('debate:message', { text: 'A turn is a window, not one message.' });
+  check('a turn allows more than one message', !again.error);
+
+  // --- yielding -----------------------------------------------------------
+  const wrongYield = await con.emit('debate:pass');
+  check('you cannot yield a floor you do not hold', !!wrongYield.error);
+  await pro.emit('debate:pass');
+  await wait(150);
+  const afterPass = watcher.got('debate:turn').slice(-1)[0];
+  check('yielding hands the floor to the other side',
+    afterPass && afterPass.side === 'con' && afterPass.index === 1, JSON.stringify(afterPass));
+  const proBlocked = await pro.emit('debate:message', { text: 'one more' });
+  check('the side that yielded is locked out', !!proBlocked.error);
+  await con.emit('debate:message', { text: 'A jury is the one check a state cannot staff.' });
+
+  // --- the clock advances on its own --------------------------------------
+  const before = watcher.got('debate:turn').length;
+  await wait(2500);
+  const ticked = watcher.got('debate:turn').slice(-1)[0];
+  check('the clock advances the turn without anyone acting',
+    watcher.got('debate:turn').length > before && ticked.index > 1, JSON.stringify(ticked));
+  check('running out of time is announced',
+    watcher.got('debate:system').some((s) => /out of time/.test(s.text)));
+
+  // --- a seat emptying stops the clock -------------------------------------
+  await con.emit('seat:release');
+  await wait(150);
+  const paused = watcher.got('debate:turn').slice(-1)[0];
+  check('an empty seat stops the clock', paused && paused.paused === true, JSON.stringify(paused));
+  const whilePaused = await pro.emit('debate:message', { text: 'free hit?' });
+  check('nobody can post while the clock is stopped', !!whilePaused.error);
+
+  const heldIndex = paused.index;
+  await con.emit('seat:claim', { side: 'con' });
+  await wait(150);
+  const resumed = watcher.got('debate:turn').slice(-1)[0];
+  check('refilling the seat restarts the clock', resumed && resumed.paused === false,
+    JSON.stringify(resumed));
+  check('the turn resumes where it stopped rather than restarting',
+    resumed.index === heldIndex, `${resumed.index} vs ${heldIndex}`);
+
+  // --- the format settles the debate on its own ----------------------------
+  await watcher.emit('audience:lean', { side: 'pro' });
+  const ended = new Promise((resolve) => {
+    watcher.on('room:concluded', (d) => resolve(d));
+    setTimeout(() => resolve(null), 15000);
+  });
+  // Drive the remaining turns by yielding, posting on each side as it comes up
+  // so the transcript stays two-sided and the auto-settle guard is satisfied.
+  for (let i = 0; i < 6; i++) {
+    const t = watcher.got('debate:turn').slice(-1)[0];
+    if (!t || !t.started) break;
+    const who = t.side === 'pro' ? pro : con;
+    await who.emit('debate:message', { text: `round ${t.round} from ${t.side}` });
+    await who.emit('debate:pass');
+    await wait(200);
+  }
+  const conclusion = await ended;
+  check('the last turn settles the debate with nobody pressing anything',
+    !!(conclusion && conclusion.result), JSON.stringify(conclusion && conclusion.url));
+  check('the auto-settled record is a normal record',
+    !!(conclusion && conclusion.result && conclusion.result.verdict && conclusion.result.headline),
+    JSON.stringify(conclusion && conclusion.result && conclusion.result.headline));
+
+  const page = await fetchText(`/d/${roomId}`);
+  check('the auto-settled debate has a permalink', page.status === 200 && page.body.includes('Juries'),
+    String(page.status));
+
+  [pro, con, watcher].forEach((c) => c.close());
   await wait(150);
 }
 

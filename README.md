@@ -36,6 +36,7 @@ implemented here.
 ```
 debate-live/
   server.js           # static serving + WebSocket + all room/chat logic
+  format.js           # rounds, turns and the schedule, pure data
   verdict.js          # verdict math, pure functions
   archive.js          # concluded debates on disk
   resultpage.js       # the permalink page, server-rendered
@@ -44,9 +45,10 @@ debate-live/
   data/               # archived debates, one JSON file each (gitignored)
 ```
 
-Three modules sit outside `server.js` because a concluded debate outlives the
-process and a live room does not. Everything in `server.js` is about the live
-room; the other three are about the record it leaves behind.
+Four modules sit outside `server.js`. Three are about the record a debate leaves
+behind, which outlives the process in a way a live room does not. `format.js` is
+separate for a different reason: it is pure data and pure functions, while the
+running clock is state, so the schedule and the timer live apart.
 
 ## Architecture
 
@@ -84,6 +86,7 @@ Room {
   audienceMessages: [ … ],
   members: Set<Client>,
   ballots: Map<voterId, { entry, current, seated }>,
+  turn: { index, endsAt, remainingMs, paused, pausedReason, over },
 }
 ```
 
@@ -100,7 +103,7 @@ Client to server: `{ id?, type, data }`. When `id` is present the server replies
 | Type | Data | Ack |
 | --- | --- | --- |
 | `room:create` | `{ topic }` | `{ roomId }` |
-| `room:join` | `{ roomId, name, stance, voterId }` | `{ ok, room, role, debateMessages, audienceMessages, lean, myLean, myEntry }` |
+| `room:join` | `{ roomId, name, stance, voterId }` | `{ ok, room, role, debateMessages, audienceMessages, lean, myLean, myEntry, turn }` |
 | `room:leave` | none | `{ ok }` |
 | `seat:claim` | `{ side: 'pro' \| 'con' }` | `{ ok, role }` |
 | `seat:release` | none | `{ ok, role: 'audience' }` |
@@ -108,12 +111,15 @@ Client to server: `{ id?, type, data }`. When `id` is present the server replies
 | `audience:message` | `{ text }` | `{ ok }`, anyone in the room |
 | `audience:lean` | `{ side: 'pro' \| 'con' }` | `{ ok, lean }`, no neutral value exists |
 | `debate:conclude` | none | `{ ok, result, url }`, seated debaters only |
+| `debate:start` | none | `{ ok, turn }`, seated debaters only, both seats filled |
+| `debate:pass` | none | `{ ok }`, only the side holding the floor |
 | `debate:typing` | `{ isTyping }` | `{ ok }`, relayed from debaters only |
 
 Server pushes: `lobby:rooms` (live room summaries), `lobby:results` (settled
 debates), `room:state` (one summary), `debate:message`, `audience:message`,
 `debate:system`, `audience:system`, `debate:typing` `{ name, role, isTyping }`,
-`room:lean` `{ pro, con, undecided }`, and `room:concluded` `{ result, url }`.
+`room:lean` `{ pro, con, undecided }`, `debate:turn` (round, side, index, total,
+remainingMs, paused), and `room:concluded` `{ result, url }`.
 
 Room summary: `{ id, topic, createdAt, status, proTaken, conTaken, proName,
 conName, audienceCount }`.
@@ -175,6 +181,69 @@ That id is client-supplied and trivially forgeable. It buys ballot continuity,
 not ballot integrity. Stuffing is possible and out of scope until there are
 accounts. One browser profile is one ballot, which is also why testing the
 verdict across several tabs of the same browser needs the id overridden.
+
+## The format
+
+Without turns the stage is a free-for-all, which is an argument rather than a
+debate: both sides type at once, the faster typist wins on volume, and there is
+no shape to what the audience is being asked to judge.
+
+A room opens with no format running and the stage wide open, which is what a
+room is before it starts: people turning up, testing the mic, arguing loosely.
+Either debater can call it to order once both seats are filled, and from then on
+the floor is enforced.
+
+```
+Opening    PRO 3:00   CON 3:00
+Rebuttal   PRO 2:00   CON 2:00
+Closing    PRO 1:30   CON 1:30
+```
+
+PRO speaks first in every round. The side proposing the motion carries the
+burden of proof, so it leads and CON always answers, which also means the last
+word in each round belongs to CON.
+
+**A turn is a window, not a single message.** You hold the floor for a stretch
+and can post as many times as you like inside it, then yield or let the clock
+take it. Anything stricter fights the medium: this is a chat box, and one
+message per turn would force people to compose a paragraph in an input one line
+tall.
+
+Yielding early only ever gives the other side more time than they were owed, so
+it needs no confirmation. Running out of time is announced on the stage and the
+floor passes automatically.
+
+The clock lives on the server and is the only thing that can advance a turn. The
+client counts down from the last `remainingMs` it was sent, purely so the
+seconds move; when its countdown hits zero it waits to be told rather than
+advancing anything itself. That is why the wire carries a remaining duration
+instead of an absolute deadline: a deadline would have every client differencing
+its own clock against the server's, and those disagree by however far the
+viewer's machine has drifted.
+
+One timer per room, not one interval scanning all of them. A debate spends most
+of its life with nothing due, and a global tick would wake up hundreds of times
+a minute to discover exactly that.
+
+### When a seat empties
+
+The clock stops. A dropped connection is not a concession, and the reconnect
+path already brings people back within seconds. Nobody can post while it is
+stopped, including the side still in the room, so an opponent's bad wifi cannot
+be farmed for free floor time. Refilling the seat restarts the clock with
+whatever time was left, not a fresh turn.
+
+### The end of the format settles the debate
+
+The last turn running out calls it. A debate that went the full distance should
+not also need somebody to remember to press a button, and "Call it" becomes the
+early exit rather than the only exit.
+
+That path can fail, and legitimately: a debater can walk out during the closing
+round, leaving a seat empty and the transcript one-sided, which the settle
+guards refuse. When that happens nothing is written, the format ends, and the
+room stays live and callable by hand. The stage says so rather than failing
+silently.
 
 ## Concluding
 
@@ -333,7 +402,10 @@ debate, prints PASS/FAIL per check, and exits nonzero on any failure. Set
 Archived records go to a throwaway directory, so a run never lands in your own
 archive.
 
-71 checks. The first 40 cover the live room: lobby push on connect, topic
+94 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so a six-turn
+format runs in six seconds rather than thirteen minutes.
+
+The first 40 cover the live room: lobby push on connect, topic
 validation, room creation, joining a missing room, everyone starting as
 audience, the `Guest` name fallback, the audience being blocked from the stage,
 seat claiming and the rejection of a taken seat or a second seat, typing relayed
@@ -355,6 +427,17 @@ itself: it serves the record, states the verdict, carries the transcript, runs n
 script, 404s on an unknown id, rejects a traversal attempt in the id, and renders
 stored markup inert.
 
+The last 23 cover the format: a room starting with no format running, the
+audience being unable to call it to order, the guard on an unfilled seat, the
+stage staying open during warm-up, PRO opening, the six-turn schedule, refusing
+to start twice, the floor blocking the side that does not hold it, a turn
+allowing more than one message, yielding a floor you do not hold, yielding
+handing over and locking the yielder out, the clock advancing a turn with nobody
+acting, an emptied seat stopping the clock and freezing both sides out, a
+refilled seat resuming the same turn rather than restarting it, and the last
+turn settling the debate on its own with a normal record and a working
+permalink.
+
 Playwright is not installable here (no npm), so the browser pass was driven
 against live tabs. Verified in the real DOM: create, claim PRO, post; a second
 participant claiming CON and replying; audience-only view with a hint instead of
@@ -366,6 +449,13 @@ text with zero injected nodes; closing the PRO tab freeing the seat in the
 others; and the reconnect path, exercised by dropping the socket through a TCP
 proxy, where the client backed off, reconnected, rejoined the still-live room
 with both histories replayed, and correctly did not reclaim its old seat.
+
+The format was verified in the browser too. Seated as PRO with an opponent on
+the wire: the start row appearing only once both seats were filled, the floor bar
+opening blue at "Opening 1/6" with a draining clock, posting on the floor,
+yielding flipping the bar red to "CON has the floor" with the composer going
+inert and saying so, and then dropping the opponent's connection, which froze
+the clock at 2:49, greyed the bar, and locked both sides out.
 
 The verdict path was verified the same way, against a hand-computed expectation.
 Two debaters and two voters, opening at PRO 0 / undecided 1 / CON 1 and closing
@@ -383,8 +473,11 @@ confirmed that entry stances survive a dropped connection.
 2. Tab 2 joins from the lobby, gives its own opening stance, takes CON, replies.
 3. Tab 3 joins, sees no stage composer, chats in the sidebar, and picks a side
    on the gauge.
-4. Tab 1 clicks "Call it" twice. All three see the verdict, the room freezes,
-   and the debate appears under "settled" in the lobby with a permalink.
+4. Tab 1 clicks "Start the debate". The floor bar opens on PRO with a running
+   clock; tab 2's composer goes inert until the floor passes to it.
+5. Either debater clicks "Call it" twice to end early, or the six turns run out
+   and the format settles it. All three see the verdict, the room freezes, and
+   the debate appears under "settled" in the lobby with a permalink.
 
 Tabs 2 and 3 need their `debateVoter` key in `localStorage` overridden to count
 as separate ballots, since one browser profile is deliberately one voter.

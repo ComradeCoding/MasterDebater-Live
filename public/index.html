@@ -684,6 +684,64 @@
     border-bottom: 1px solid var(--rule);
   }
 
+  /* --------------------------------------------------------- the floor -- */
+  /* Whose turn it is, and how much of it is left. The bar drains in the ink of
+     whoever holds the floor, so the colour vanishing IS the time vanishing.
+     A number alone makes you read; a shrinking red bar you take in sideways
+     while still writing. */
+
+  .floor {
+    flex-shrink: 0;
+    background: var(--ink-2);
+    border-bottom: 2px solid var(--rule);
+  }
+  .drain { height: 5px; background: var(--plate); }
+  .drainfill {
+    height: 100%;
+    width: 100%;
+    background: var(--rule-hot);
+    /* Linear, and only just long enough to hide the tick quantisation. Easing
+       a clock would make it lie about the rate time is passing. */
+    transition: width .25s linear;
+  }
+  .floor.pro .drainfill { background: var(--pro); }
+  .floor.con .drainfill { background: var(--con); }
+  .floor.paused .drainfill { background: var(--rule-hot); }
+
+  .floorrow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 22px;
+    font-family: var(--data);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+  }
+  .floorrow .spacer { flex: 1; }
+  .floorrow .round { color: var(--paper); }
+  .floorrow .holder { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .floorrow .holder.open { color: var(--dim); }
+  .floor.pro .floorrow .holder { color: var(--pro); }
+  .floor.con .floorrow .holder { color: var(--con); }
+  .floor.paused .floorrow .holder { color: var(--dim); }
+
+  .floorrow .clock {
+    font-size: 17px;
+    letter-spacing: .06em;
+    color: var(--paper);
+    font-variant-numeric: tabular-nums;
+  }
+  /* The last thirty seconds. One state change, not a countdown that escalates
+     through three colours. */
+  .floorrow .clock.low { color: var(--con); }
+  .floor.paused .floorrow .clock { color: var(--dim); }
+  .floorrow button { padding: 5px 11px; font-size: 11px; }
+
+  .floor.callorder { border-bottom-color: var(--rule); }
+  .floor.callorder .floorrow { padding: 11px 22px; }
+
   /* -------------------------------------------------------- the record -- */
   /* A settled debate stops being an app and becomes a document. The card
      replaces both composers rather than sitting above them, so there is no
@@ -997,6 +1055,28 @@
         <div class="readout" id="gaugeRead" aria-live="polite">Nobody has called it yet</div>
       </div>
       <button class="lean con" id="leanCon" aria-pressed="false">Side with CON</button>
+    </div>
+
+    <!-- The floor. A draining bar in the holder's own ink, so whose time is
+         running out is the same fact as which colour is disappearing. -->
+    <div class="floor" id="floorBar" hidden>
+      <div class="drain"><div class="drainfill" id="drainFill"></div></div>
+      <div class="floorrow">
+        <span class="round" id="floorRound"></span>
+        <span class="holder" id="floorHolder"></span>
+        <span class="spacer"></span>
+        <span class="clock" id="floorClock">0:00</span>
+        <button id="yieldBtn" hidden>Yield</button>
+      </div>
+    </div>
+
+    <div class="floor callorder" id="startRow" hidden>
+      <div class="floorrow">
+        <span class="round">Warm-up</span>
+        <span class="holder open">Stage is open, no clock running</span>
+        <span class="spacer"></span>
+        <button class="primary" id="startBtn">Start the debate</button>
+      </div>
     </div>
 
     <div class="messages" id="debateMsgs"></div>
@@ -1347,7 +1427,9 @@
       $('debateMsgs').scrollTop = $('debateMsgs').scrollHeight;
       $('audMsgs').scrollTop = $('audMsgs').scrollHeight;
 
-      renderRoom();
+      // applyTurn calls renderRoom itself, so the composer is gated by the
+      // floor on the very first paint rather than a frame later.
+      applyTurn(res.turn);
     });
   }
 
@@ -1360,6 +1442,10 @@
     pendingRoomId = null;
     concluded = false;
     disarmCallIt();
+    stopTick();
+    turn = { started: false };
+    $('floorBar').hidden = true;
+    $('startRow').hidden = true;
     $('resultCard').hidden = true;
     $('room').classList.remove('active');
     $('lobby').hidden = false;
@@ -1414,6 +1500,22 @@
     $('callIt').hidden = !seated;
     if (concluded) $('typing').textContent = '';
 
+    // The composer stays on screen when it is not your turn, but goes inert and
+    // says why. Hiding it would move the layout under the other debater every
+    // time the floor changed hands.
+    var floor = haveFloor();
+    $('debateInput').disabled = !floor || concluded;
+    $('debateSend').disabled = !floor || concluded;
+    $('debateInput').placeholder = concluded
+      ? 'The debate is settled.'
+      : floor
+        ? 'Make your case…'
+        : turn.paused
+          ? 'The clock is stopped.'
+          : turn.side
+            ? turn.side.toUpperCase() + ' has the floor.'
+            : 'Wait your turn.';
+
     // The sidebar closes with the stage. A settled debate is a fixed record,
     // and letting the floor keep talking would leave the permalink out of date
     // the moment it was written.
@@ -1425,6 +1527,7 @@
     $('leanPro').hidden = seated || concluded;
     $('leanCon').hidden = seated || concluded;
     renderLean();
+    renderFloor();
   }
 
   // -------------------------------------------------------------- verdict --
@@ -1508,6 +1611,102 @@
   }
   $('proBtn').onclick = function () { toggleSeat('pro'); };
   $('conBtn').onclick = function () { toggleSeat('con'); };
+
+  // ---------------------------------------------------------- the floor --
+  // The server owns the clock and is the only thing that can advance a turn.
+  // This countdown is a display of the last `remainingMs` it sent, ticking
+  // locally so the seconds move. It can drift a little and it does not matter:
+  // when it hits zero the client waits for the server to say so rather than
+  // advancing anything itself.
+
+  var turn = { started: false };
+  var turnDeadline = 0;   // local ms timestamp the current turn runs out
+  var turnTotalMs = 0;
+  var tickTimer = null;
+
+  socket.on('debate:turn', function (t) {
+    if (!currentRoom) return;
+    applyTurn(t);
+  });
+
+  function applyTurn(t) {
+    turn = t || { started: false };
+    if (turn.started && !turn.paused) {
+      turnDeadline = Date.now() + (turn.remainingMs || 0);
+    }
+    turnTotalMs = turn.started ? (turn.seconds || 1) * 1000 : 0;
+    // renderRoom drives renderFloor, so this is one repaint, not two.
+    renderRoom();
+  }
+
+  function mmss(ms) {
+    var s = Math.max(0, Math.ceil(ms / 1000));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  function renderFloor() {
+    var bar = $('floorBar');
+    var seated = myRole === 'pro' || myRole === 'con';
+    var bothSeated = currentRoom && currentRoom.proTaken && currentRoom.conTaken;
+
+    // Only the two debaters are offered the start button. The audience seeing a
+    // control it cannot use reads as broken rather than as not-for-you.
+    $('startRow').hidden = concluded || turn.started || turn.over || !seated || !bothSeated;
+
+    if (!turn.started || concluded) {
+      bar.hidden = true;
+      stopTick();
+      return;
+    }
+    bar.hidden = false;
+    bar.className = 'floor ' + (turn.paused ? 'paused' : turn.side);
+
+    $('floorRound').textContent = turn.round + ' · ' + (turn.index + 1) + '/' + turn.total;
+    $('floorHolder').textContent = turn.paused
+      ? (turn.pausedReason || 'Clock stopped')
+      : (turn.side === myRole ? 'You have the floor' : turn.side.toUpperCase() + ' has the floor');
+    $('yieldBtn').hidden = turn.paused || turn.side !== myRole;
+
+    tick();
+    if (!turn.paused) startTick();
+    else stopTick();
+  }
+
+  function tick() {
+    if (!turn.started) return;
+    var left = turn.paused ? (turn.remainingMs || 0) : Math.max(0, turnDeadline - Date.now());
+    $('floorClock').textContent = mmss(left);
+    $('floorClock').classList.toggle('low', !turn.paused && left <= 30000);
+    var pct = turnTotalMs ? (left / turnTotalMs) * 100 : 0;
+    $('drainFill').style.width = Math.max(0, Math.min(100, pct)) + '%';
+  }
+
+  function startTick() {
+    stopTick();
+    tickTimer = setInterval(tick, 250);
+  }
+  function stopTick() {
+    if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+  }
+
+  $('startBtn').onclick = function () {
+    socket.emit('debate:start', function (res) {
+      if (res.error) return toast(res.error);
+    });
+  };
+
+  $('yieldBtn').onclick = function () {
+    socket.emit('debate:pass', function (res) {
+      if (res.error) return toast(res.error);
+    });
+  };
+
+  // True only when this client may actually post to the stage right now.
+  function haveFloor() {
+    if (myRole !== 'pro' && myRole !== 'con') return false;
+    if (!turn.started) return true; // warm-up, stage is open
+    return !turn.paused && turn.side === myRole;
+  }
 
   // ---------------------------------------------------------- calling it --
   // Irreversible and it ends the debate for everyone in the room, so the first
