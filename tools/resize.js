@@ -78,9 +78,15 @@ function run(inFile, outFile, max) {
   };
 }
 
-const [, , inFile, outFile, maxArg] = process.argv;
-if (!inFile || !outFile || !maxArg) {
-  console.error('usage: node ' + path.basename(__filename) + ' <in.png> <out.png> <max-dimension>');
-  process.exit(1);
+// The filter itself is worth sharing with the GIF resizer, which runs it over
+// every frame. Only the command line half is skipped when this is required.
+module.exports = { resize: resize, run: run };
+
+if (require.main === module) {
+  const [, , inFile, outFile, maxArg] = process.argv;
+  if (!inFile || !outFile || !maxArg) {
+    console.error('usage: node ' + path.basename(__filename) + ' <in.png> <out.png> <max-dimension>');
+    process.exit(1);
+  }
+  console.log(JSON.stringify(run(inFile, outFile, Number(maxArg)), null, 2));
 }
-console.log(JSON.stringify(run(inFile, outFile, Number(maxArg)), null, 2));

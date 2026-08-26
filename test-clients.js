@@ -556,6 +556,7 @@ async function runFormat() {
   await wait(150);
 
   await runHomesite();
+  runGif();
 }
 
 // ==========================================================================
@@ -696,6 +697,125 @@ async function runHomesite() {
   // The two roots must not bleed into each other.
   const cross = await rawGet('/../public/index.html', 'comradecoding.com');
   check('the homepage root cannot reach the app root', cross.status !== 200, String(cross.status));
+}
+
+
+// ==========================================================================
+// The GIF codec
+// ==========================================================================
+// LZW is the part of this repository with no second opinion available: get
+// the code width wrong by one and the picture is noise, and nothing in the
+// page will tell you, because a browser draws a corrupt GIF without
+// complaining. So the compressor is tested against its own decompressor over
+// the awkward sizes, and the decompressor is tested against the clip art on
+// the homepage, which was written by encoders that are not ours.
+
+function runGif() {
+  const gif = require('./tools/gif');
+  const fs = require('fs');
+  const os = require('os');
+  const pathmod = require('path');
+
+  // A repeatable stand-in for random. A failure that only shows up one run in
+  // ten is worse than no test at all.
+  let seed = 20260826;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+
+  let clean = true;
+  let widest = 0;
+  for (const minCodeSize of [2, 3, 4, 7, 8]) {
+    const values = 1 << minCodeSize;
+    for (const len of [1, 2, 3, 17, 255, 256, 1000, 40000]) {
+      const noise = Buffer.alloc(len);
+      const runs = Buffer.alloc(len);
+      const flat = Buffer.alloc(len);
+      for (let i = 0; i < len; i++) {
+        noise[i] = rnd(values);
+        runs[i] = ((i / 37) | 0) % values;
+      }
+      for (const src of [noise, runs, flat]) {
+        const round = gif.lzwDecode(gif.lzwEncode(src, minCodeSize), minCodeSize, len);
+        if (Buffer.compare(src, round) !== 0) clean = false;
+        widest = Math.max(widest, len);
+      }
+    }
+  }
+  check('LZW survives a round trip at every code width', clean,
+    'noise, long runs and a flat buffer, up to ' + widest + ' pixels');
+
+  // Enough distinct sequences to push the dictionary past 511, 1023, 2047 and
+  // 4095, which is where an off-by-one in the widening rule shows up, and past
+  // 4096, where the table fills and has to be thrown away and rebuilt.
+  const overflow = Buffer.alloc(300000);
+  for (let i = 0; i < overflow.length; i++) overflow[i] = rnd(256);
+  check('LZW rebuilds its dictionary when it fills',
+    Buffer.compare(overflow, gif.lzwDecode(gif.lzwEncode(overflow, 8), 8, overflow.length)) === 0);
+
+  // The clip art on the homepage, decoded, re-encoded, and decoded again. The
+  // frames that come back must be the frames that went in: same count, same
+  // transparency, same colours. This is the check that catches a wrong
+  // disposal method or a patch rectangle that does not cover what it wiped,
+  // neither of which is visible in a single frame.
+  const homesite = pathmod.join(__dirname, 'homesite');
+  for (const name of ['sickle', 'manifesto', 'guestbook', 'marx']) {
+    const file = pathmod.join(homesite, name + '.gif');
+    if (!fs.existsSync(file)) { check('clip art ' + name + '.gif exists', false); continue; }
+    const src = gif.read(file);
+    const tmp = pathmod.join(os.tmpdir(), 'gif-test-' + process.pid + '-' + name + '.gif');
+    let back = null;
+    try {
+      gif.write(tmp, src.w, src.h, src.frames, {});
+      back = gif.read(tmp);
+    } finally {
+      try { fs.unlinkSync(tmp); } catch {}
+    }
+
+    let alphaMismatch = 0;
+    let worst = 0;
+    const frames = Math.min(src.frames.length, back.frames.length);
+    for (let i = 0; i < frames; i++) {
+      const a = src.frames[i].rgba;
+      const b = back.frames[i].rgba;
+      for (let o = 0; o < a.length; o += 4) {
+        if ((a[o + 3] === 0) !== (b[o + 3] === 0)) { alphaMismatch++; continue; }
+        if (a[o + 3] === 0) continue;
+        worst = Math.max(worst,
+          Math.abs(a[o] - b[o]), Math.abs(a[o + 1] - b[o + 1]), Math.abs(a[o + 2] - b[o + 2]));
+      }
+    }
+    check(name + '.gif survives decode, encode and decode unchanged',
+      src.frames.length === back.frames.length && alphaMismatch === 0 && worst === 0,
+      src.frames.length + ' frames in, ' + back.frames.length + ' out, '
+        + alphaMismatch + ' pixels disagreeing on transparency, worst channel ' + worst);
+  }
+
+  // The icons are drawn at a fixed size by the stylesheet, and the point of
+  // shrinking them was to ship close to that size rather than twenty times it.
+  // A future edit that drops a full resolution file back in should say so.
+  const budget = { 'sickle.gif': 40000, 'manifesto.gif': 30000, 'guestbook.gif': 12000 };
+  for (const [name, limit] of Object.entries(budget)) {
+    const bytes = fs.statSync(pathmod.join(homesite, name)).size;
+    check(name + ' stays under its weight budget', bytes <= limit,
+      bytes + ' bytes, budget ' + limit);
+  }
+
+  // Drawn at 18, 22 and 26 pixels, so these want to be a whole multiple of
+  // that and not one pixel off it. Shrinking by exactly two averages four
+  // pixels into one; at one and a half the browser lands between pixels all
+  // the way across and the icon looks worse than a smaller file would.
+  const drawn = {
+    'sickle.gif': [16, 18],
+    'manifesto.gif': [22, 20],
+    'guestbook.gif': [21, 26],
+  };
+  for (const [name, [dw, dh]] of Object.entries(drawn)) {
+    const g = gif.read(pathmod.join(homesite, name));
+    const rx = g.w / dw;
+    const ry = g.h / dh;
+    check(name + ' is a whole multiple of the size it is drawn at',
+      rx === ry && rx === Math.round(rx) && rx >= 1,
+      g.w + 'x' + g.h + ' against ' + dw + 'x' + dh + ', ratio ' + rx.toFixed(2) + ' by ' + ry.toFixed(2));
+  }
 }
 
 (async () => {
