@@ -100,6 +100,7 @@ function render(record, origin) {
 <meta property="og:title" content="${esc(record.topic)}">
 <meta property="og:description" content="${esc(summary)}">
 <meta property="og:url" content="${esc(url)}">
+<link rel="canonical" href="${esc(url)}">
 <style>
   :root {
     --ink: #0a0b10; --ink-2: #101219; --plate: #161923;

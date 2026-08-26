@@ -595,6 +595,23 @@ async function runHomesite() {
   check('the homepage bans inline script', /script-src 'self'/.test(home.csp || '') && !/unsafe-inline/.test((home.csp || '').split('style-src')[0]), home.csp);
   check('the homepage links to MasterDebater', /masterdebater/i.test(home.body));
 
+  // --- crawlers ------------------------------------------------------------
+  const robots = await rawGet('/robots.txt', 'comradecoding.com');
+  check('robots.txt is served',
+    robots.status === 200 && /text\/plain/.test(robots.type || ''), String(robots.status));
+  check('robots.txt points at the sitemap', /Sitemap: https?:\/\/\S+\/sitemap\.xml/.test(robots.body),
+    robots.body);
+
+  const map = await rawGet('/sitemap.xml', 'comradecoding.com');
+  check('sitemap.xml is served as xml',
+    map.status === 200 && /application\/xml/.test(map.type || ''), String(map.status));
+  check('the sitemap lists the homepage and the arena',
+    /<loc>[^<]*\/<\/loc>/.test(map.body) && /<loc>[^<]*\/arena<\/loc>/.test(map.body), map.body.slice(0, 200));
+  // Settled debates are the pages worth finding, so they have to be in there.
+  check('the sitemap lists settled debates with a date',
+    /<loc>[^<]*\/d\/[0-9a-f]{6}<\/loc>\s*<lastmod>\d{4}-\d{2}-\d{2}<\/lastmod>/.test(map.body),
+    map.body.slice(0, 400));
+
   // The clip art is the only thing the page loads, and it loads by absolute
   // path, so it has to serve from the home root on every host exactly as the
   // script does.

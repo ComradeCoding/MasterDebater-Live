@@ -975,6 +975,45 @@ function originOf(req) {
   return `${proto}://${host}`;
 }
 
+// The address search engines should file everything under. Set it in
+// production and every generated link points at the real domain no matter
+// which host served the request; leave it unset and the site talks about
+// itself using whatever host asked, which is what local development wants.
+const SITE_ORIGIN = (process.env.SITE_ORIGIN || '').replace(/\/+$/, '');
+const canonicalOrigin = (req) => SITE_ORIGIN || originOf(req);
+// The same page reachable on two domains is the same page indexed twice, and
+// search engines pick the winner themselves. Anything that is not the
+// canonical host asks politely not to be crawled at all.
+const isCanonicalHost = (req) => !SITE_ORIGIN || originOf(req) === SITE_ORIGIN;
+
+// The in-memory archive index is what the lobby lists, so the sitemap and the
+// lobby agree by construction. Older records stay on disk and keep working;
+// they simply stop being advertised.
+const SITEMAP_MAX = 200;
+
+const XML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' };
+const escXml = (s) => String(s).replace(/[&<>"']/g, (c) => XML_ESCAPES[c]);
+
+// Built from the archive rather than kept as a file, so a debate is listed the
+// moment it is settled and nobody has to remember to regenerate anything.
+function buildSitemap(origin) {
+  const day = (ts) => new Date(ts).toISOString().slice(0, 10);
+  const entry = (loc, extra) => `  <url>\n    <loc>${escXml(loc)}</loc>\n${extra}  </url>`;
+  const rows = [
+    entry(`${origin}/`, '    <changefreq>weekly</changefreq>\n    <priority>1.0</priority>\n'),
+    entry(`${origin}/arena`, '    <changefreq>hourly</changefreq>\n    <priority>0.9</priority>\n'),
+  ];
+  // Every settled debate. These are the pages worth finding: permanent,
+  // self-contained, and the only reason anyone outside a room ever arrives.
+  for (const r of archive.list(SITEMAP_MAX)) {
+    rows.push(entry(`${origin}/d/${r.id}`,
+      `    <lastmod>${day(r.concludedAt)}</lastmod>\n    <priority>0.7</priority>\n`));
+  }
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
+    rows.join('\n') + '\n</urlset>\n';
+}
+
 const server = http.createServer((req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { Allow: 'GET, HEAD' });
@@ -990,6 +1029,32 @@ const server = http.createServer((req, res) => {
   }
   if (urlPath.includes('\0')) { res.writeHead(400); return res.end('Bad request'); }
 
+  // --- crawlers ------------------------------------------------------------
+  // Both are generated, not files, so they are never stale and never need a
+  // build step. They sit above the site split because they belong to the
+  // domain rather than to either page.
+  if (urlPath === '/robots.txt') {
+    const body = isCanonicalHost(req)
+      ? `User-agent: *\nAllow: /\n\nSitemap: ${canonicalOrigin(req)}/sitemap.xml\n`
+      : 'User-agent: *\nDisallow: /\n';
+    res.writeHead(200, {
+      'Cache-Control': 'no-cache',
+      'Content-Type': 'text/plain; charset=utf-8',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return res.end(req.method === 'HEAD' ? undefined : body);
+  }
+
+  if (urlPath === '/sitemap.xml') {
+    const body = buildSitemap(canonicalOrigin(req));
+    res.writeHead(200, {
+      'Cache-Control': 'no-cache',
+      'Content-Type': 'application/xml; charset=utf-8',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return res.end(req.method === 'HEAD' ? undefined : body);
+  }
+
   // --- the permalink -------------------------------------------------------
   // Never touches the static path at all. The id is matched against the exact
   // 6-hex-char room-id shape before it reaches the filesystem, so `..` and
@@ -1003,7 +1068,7 @@ const server = http.createServer((req, res) => {
         '<body style="background:#0a0b10;color:#f4f1e9;font:16px system-ui;padding:60px">' +
         'No debate lives at that address. <a style="color:#b96bff" href="/">Start one</a>.');
     }
-    const body = resultpage.render(record, originOf(req));
+    const body = resultpage.render(record, canonicalOrigin(req));
     res.writeHead(200, {
       ...securityHeaders("'none'"),
       'Content-Type': 'text/html; charset=utf-8',
