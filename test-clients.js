@@ -656,7 +656,7 @@ async function runHomesite() {
   // path, so it has to serve from the home root on every host exactly as the
   // script does.
   for (const asset of ['/marx.gif', '/bowie.png', '/sickle.gif', '/trotsky.png',
-                       '/manifesto.gif', '/guestbook.gif', '/ring.png', '/bounce.js']) {
+                       '/manifesto.gif', '/guestbook.gif', '/ring.png', '/bounce.js', '/athletics.png']) {
     const onHome = await rawGet(asset, 'comradecoding.com');
     const elsewhere = await rawGet(asset, 'debate.comradecoding.com');
     check(`${asset} serves on both hosts`,

@@ -13,7 +13,7 @@
      A Geocities homepage, rebuilt with modern CSS wearing period clothing.
      Every animation runs on steps() so it flickers like an 8-frame GIF
      instead of tweening like it was made after 2003. Most of the clip art is
-     drawn in CSS out of borders and gradients; the six real images are clip
+     drawn in CSS out of borders and gradients; the seven real images are clip
      art the owner chose, requisitioned deliberately.
   ------------------------------------------------------------------------- */
 
@@ -257,36 +257,14 @@
     image-rendering: pixelated;
   }
 
-  /* Stopwatch, hand sweeping in eight jumps like everything else here. The
-     face is drawn rather than photographed because at 15px a photograph of a
-     watch is a grey dot. */
-  .ic-watch {
-    border: 2px solid #ffcc00;
-    border-radius: 50%;
-    background: #330000;
-  }
-  .ic-watch::before {
-    content: "";
-    position: absolute;
-    left: 50%;
-    top: -4px;
-    width: 5px;
-    height: 3px;
-    margin-left: -2.5px;
-    background: #ffcc00;
-  }
-  .ic-watch::after {
-    content: "";
-    position: absolute;
-    left: 50%;
-    bottom: 50%;
-    width: 2px;
-    height: 5px;
-    margin-left: -1px;
-    background: #ff2200;
-    /* Pivot at the base of the hand, which is the centre of the face. */
-    transform-origin: 50% 100%;
-    animation: spin 2s steps(8) infinite;
+  /* The fighter, cut out of his white studio background. Taller than the rest
+     because a whole figure at 15px is a smudge, and sized off his own aspect
+     so he is not stretched. */
+  .ic-drago {
+    width: 22px;
+    height: 26px;
+    vertical-align: -8px;
+    background: url("/athletics.png") center/contain no-repeat;
   }
 
   /* Red star, blinking between red and gold. */
@@ -516,7 +494,7 @@
         <ul>
           <li><span class="ic ic-sickle" aria-hidden="true"></span><a href="/home">Home Soviet</a></li>
           <li><span class="ic ic-trotsky" aria-hidden="true"></span><a href="/arena">MasterDebater&nbsp;Live</a> <span class="starburst">NEW!!</span></li>
-          <li><span class="ic ic-watch" aria-hidden="true"></span><a href="https://foot.comradecoding.com">Athletics</a></li>
+          <li><span class="ic ic-drago" aria-hidden="true"></span><a href="https://foot.comradecoding.com">Athletics</a></li>
           <li><span class="ic ic-book" aria-hidden="true"></span><a href="#manifesto">The Manifesto</a></li>
           <li><span class="ic ic-star" aria-hidden="true"></span><a href="#plan">Five Year Plan</a></li>
           <li><span class="ic ic-mouse" aria-hidden="true"></span><a href="#guestbook">Guestbook</a></li>
