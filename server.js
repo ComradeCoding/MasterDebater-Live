@@ -933,7 +933,9 @@ const hostOf = (req) => String(req.headers.host || '').toLowerCase().split(':')[
 // Files belonging to the homepage rather than the app, served from the home
 // root whatever host asked for them. Explicit rather than a fallback search,
 // so a name colliding with an app asset can never quietly shadow it.
-const HOME_ASSETS = new Set(['/midi.js']);
+const HOME_ASSETS = new Set([
+  '/midi.js', '/marx.gif', '/sickle.gif', '/trotsky.png', '/manifesto.gif',
+]);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -942,6 +944,7 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.gif': 'image/gif',
   '.ico': 'image/x-icon',
 };
 

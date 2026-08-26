@@ -125,20 +125,53 @@
     timer = setTimeout(function () { if (playing) schedule(); }, (total + 0.6) * 1000);
   }
 
+  // iOS will not let a context make sound until a real buffer has been played
+  // from inside a user gesture, no matter how many times resume() is called.
+  // This is the standard unlock, and it is silent and instant.
+  function unlock() {
+    try {
+      var buf = ctx.createBuffer(1, 1, 22050);
+      var src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      src.start(0);
+    } catch (e) { /* older engine, resume on its own will have to do */ }
+  }
+
+  function begin() {
+    if (playing) return;
+    playing = true;
+    stoppedByUser = false;
+    try { sessionStorage.removeItem('midiOff'); } catch (e) {}
+    render();
+    schedule();
+  }
+
   function play() {
     if (playing) return;
     if (!ensureContext()) return;
-    // Created suspended when there has been no gesture yet; resume returns a
-    // promise that rejects on browsers that refuse, which is not an error.
-    var resumed = ctx.state === 'suspended' ? ctx.resume() : Promise.resolve();
-    resumed.then(function () {
-      if (playing) return;
-      playing = true;
-      stoppedByUser = false;
-      try { sessionStorage.removeItem('midiOff'); } catch (e) {}
-      render();
-      schedule();
-    }).catch(function () { /* blocked, the button is still there */ });
+    unlock();
+    if (ctx.state !== 'suspended') return begin();
+    // resume() has to be called synchronously inside the gesture; only its
+    // resolution is async. A rejection means the browser refused, which is a
+    // decision rather than a failure.
+    var p = ctx.resume();
+    if (p && p.then) p.then(begin).catch(function () { render(); });
+    else begin();
+  }
+
+  // Best effort, and usually refused. Browsers block audio that no gesture
+  // asked for, and mobile blocks it categorically, so this succeeds only where
+  // the visitor already has enough history with the site. The armed first
+  // touch below is the path that actually carries.
+  function tryAutoplay() {
+    if (stoppedByUser || playing) return;
+    if (!ensureContext()) return;
+    if (ctx.state === 'running') return begin();
+    var p = ctx.resume();
+    if (p && p.then) {
+      p.then(function () { if (ctx.state === 'running') begin(); }).catch(function () {});
+    }
   }
 
   function stop(byUser) {
@@ -178,15 +211,21 @@
     }
     render();
 
-    // Arm it. The first click anywhere starts the music the way the page would
-    // have in 1999, unless the visitor has already told us to be quiet.
-    var arm = function () {
-      document.removeEventListener('click', arm);
-      document.removeEventListener('keydown', arm);
+    // Ask to start unprompted, then arm for the gesture that will actually be
+    // allowed to. `pointerdown` and `touchend` are both here because a tap is
+    // the only thing that ever unlocks audio on a phone, and `click` alone
+    // arrives too late on some versions of mobile Safari.
+    tryAutoplay();
+
+    var events = ['pointerdown', 'touchend', 'click', 'keydown'];
+    var arm = function (ev) {
+      // The button runs its own handler. Without this, one tap would start the
+      // music here and then immediately toggle it off there.
+      if (ev && ev.target && ev.target.closest && ev.target.closest('#midiToggle')) return;
+      events.forEach(function (e) { document.removeEventListener(e, arm); });
       if (!stoppedByUser && !playing) play();
     };
-    document.addEventListener('click', arm);
-    document.addEventListener('keydown', arm);
+    events.forEach(function (e) { document.addEventListener(e, arm, { passive: true }); });
   }
 
   if (document.readyState === 'loading') {

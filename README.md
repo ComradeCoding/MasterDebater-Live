@@ -295,7 +295,10 @@ and `/arena` is the app on any host, which is what puts MasterDebater at
 `/d/` permalinks sit above the split entirely, so a settled debate shares from
 either domain.
 
-The homepage ships no images. It is a Geocities pastiche done honestly: the
+The homepage ships four images, all of them supplied by the owner: three
+animated GIFs (a hammer and sickle, a dancing Marx, a pixel-art book) and one
+transparent portrait. Everything else is drawn in CSS. It is a Geocities
+pastiche done honestly: the
 animations run on `steps()` so they flicker like 8-frame GIFs, the marquee tags
 are real, and the table layout is load-bearing on purpose.
 

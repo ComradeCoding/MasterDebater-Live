@@ -573,7 +573,12 @@ function rawGet(p, host) {
       (res) => {
         let body = '';
         res.on('data', (c) => { body += c; });
-        res.on('end', () => resolve({ status: res.statusCode, body, csp: res.headers['content-security-policy'] }));
+        res.on('end', () => resolve({
+          status: res.statusCode,
+          body,
+          csp: res.headers['content-security-policy'],
+          type: res.headers['content-type'],
+        }));
       }
     );
     req.on('error', reject);
@@ -589,6 +594,20 @@ async function runHomesite() {
     (await rawGet('/', 'www.comradecoding.com')).body.includes('COMRADECODING.COM'));
   check('the homepage bans inline script', /script-src 'self'/.test(home.csp || '') && !/unsafe-inline/.test((home.csp || '').split('style-src')[0]), home.csp);
   check('the homepage links to MasterDebater', /masterdebater/i.test(home.body));
+
+  // The clip art is the only thing the page loads, and it loads by absolute
+  // path, so it has to serve from the home root on every host exactly as the
+  // script does.
+  for (const asset of ['/marx.gif', '/sickle.gif', '/trotsky.png', '/manifesto.gif']) {
+    const onHome = await rawGet(asset, 'comradecoding.com');
+    const elsewhere = await rawGet(asset, 'debate.comradecoding.com');
+    check(`${asset} serves on both hosts`,
+      onHome.status === 200 && elsewhere.status === 200,
+      `${onHome.status} / ${elsewhere.status}`);
+  }
+  const gifType = await rawGet('/marx.gif', 'comradecoding.com');
+  check('gifs are served as image/gif, not a download',
+    /image\/gif/.test(gifType.type || ''), gifType.type);
 
   const midi = await rawGet('/midi.js', 'comradecoding.com');
   check('the homepage script is served on the home host',
