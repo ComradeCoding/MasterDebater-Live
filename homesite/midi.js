@@ -2,21 +2,30 @@
 //
 // internationale.mid, made real.
 //
-// The marquee has been promising this since 1997, so here it is: the tune
-// synthesized on the fly with two oscillators, a square wave carrying the
-// melody and a triangle underneath it. No audio file ships with this page,
-// which keeps the site the single hand-typed document it claims to be and
-// means the thing loads in bytes rather than megabytes.
+// The tune is synthesized in the browser and played back through an ordinary
+// <audio> element. No audio file ships with this page: the samples are
+// generated at load, wrapped in a WAV header, and handed to the element as a
+// blob, so the whole site is still one document plus its clip art.
 //
-// The composition (Pierre De Geyter, 1888) is public domain. Nothing here is
-// a recording of anyone's performance; every note is generated in the browser.
+// The composition (Pierre De Geyter, 1888) is public domain. Nothing here is a
+// recording of anyone's performance; every sample is computed on the spot.
 //
-// Two things worth knowing about autoplay. Every modern browser refuses to
-// start audio without a user gesture, so a page cannot simply blare on load
-// the way a Geocities page did. What it can do is arm itself and start on the
-// visitor's first click anywhere, which is what happens below. And a visitor
-// who presses STOP is remembered for the session, because overriding somebody
-// who has explicitly silenced you is how you get a tab closed.
+// Why an <audio> element rather than the Web Audio API, which is the obvious
+// tool for synthesizing tones:
+//
+//   1. iOS silences the Web Audio API when the hardware ring/silent switch is
+//      set to silent, and gives no error when it does. An <audio> element is
+//      ordinary media playback and stands a much better chance of being heard.
+//   2. An <audio> element loops natively, so there is no scheduler to keep
+//      running and nothing to drift.
+//   3. Its play() returns a promise that actually reports why it was refused,
+//      which is the difference between debugging this and guessing at it.
+//
+// Two constraints shape the rest. Every browser refuses audio that no gesture
+// asked for, so the page arms itself and starts on the first tap. And iOS wants
+// play() called synchronously inside that gesture, which is why the samples are
+// built at load time: by the time a finger lands, there is nothing left to do
+// but start.
 
 (function () {
   var NOTE = {
@@ -26,11 +35,9 @@
     R: 0
   };
 
-  // The tune, as [note, beats]. Reconstructed by ear in G major, so treat this
-  // table as the one part of the page most likely to want a correction: it is
-  // plain data and any wrong note is a one line fix.
+  // The tune, as [note, beats]. Reconstructed by ear in G major, so this table
+  // is the part most likely to want a correction; any wrong note is one line.
   var MELODY = [
-    // Verse
     ['D4', 1],
     ['G4', 1.5], ['G4', 0.5], ['G4', 1], ['B4', 1],
     ['D5', 1.5], ['C5', 0.5], ['B4', 1], ['A4', 1],
@@ -40,7 +47,6 @@
     ['D5', 1.5], ['C5', 0.5], ['B4', 1], ['A4', 1],
     ['B4', 1], ['A4', 1], ['G4', 1], ['A4', 1],
     ['G4', 3], ['D4', 1],
-    // Chorus
     ['G4', 1], ['G4', 1], ['C5', 1.5], ['C5', 0.5],
     ['C5', 1], ['B4', 1], ['A4', 1], ['G4', 1],
     ['A4', 1], ['B4', 1], ['C5', 1], ['A4', 1],
@@ -51,181 +57,198 @@
     ['G4', 3], ['R', 1]
   ];
 
-  // One root per bar of four beats, walked underneath the melody.
   var BASS = ['G3', 'G3', 'C4', 'G3', 'D4', 'G3', 'C4', 'D4',
               'G3', 'C4', 'D4', 'G3', 'C4', 'G3', 'D4', 'G3'];
 
   var BPM = 92;
   var BEAT = 60 / BPM;
+  var RATE = 22050;
+  // iOS ignores volume set on an audio element, so the level has to be baked
+  // into the samples rather than applied at playback.
+  var LEVEL = 0.22;
 
-  var ctx = null;
-  var master = null;
-  var timer = null;
-  var playing = false;
+  var audio = null;
+  var ready = false;
   var stoppedByUser = false;
 
-  try {
-    stoppedByUser = sessionStorage.getItem('midiOff') === '1';
-  } catch (e) { /* storage blocked, treat as not stopped */ }
+  try { stoppedByUser = sessionStorage.getItem('midiOff') === '1'; } catch (e) {}
 
   function el(id) { return document.getElementById(id); }
 
-  function ensureContext() {
-    if (ctx) return ctx;
-    var AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return null;
-    ctx = new AC();
-    master = ctx.createGain();
-    // Deliberately modest. Nobody asked to be startled.
-    master.gain.value = 0.16;
-    master.connect(ctx.destination);
-    return ctx;
-  }
+  // --- synthesis -----------------------------------------------------------
 
-  // One note, with a short attack and a long-ish decay so the square wave reads
-  // as an instrument rather than a beep.
-  function tone(freq, start, dur, type, level) {
-    if (!freq) return;
-    var osc = ctx.createOscillator();
-    var gain = ctx.createGain();
-    osc.type = type;
-    osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0, start);
-    gain.gain.linearRampToValueAtTime(level, start + 0.02);
-    gain.gain.setValueAtTime(level, start + dur * 0.7);
-    gain.gain.linearRampToValueAtTime(0, start + dur * 0.98);
-    osc.connect(gain);
-    gain.connect(master);
-    osc.start(start);
-    osc.stop(start + dur);
-  }
+  var square = function (phase) { return phase < 0.5 ? 1 : -1; };
+  var triangle = function (phase) { return 4 * Math.abs(phase - 0.5) - 1; };
 
-  // Schedules the whole tune ahead of time and re-arms itself at the end, so
-  // playback does not depend on a timer firing punctually mid-phrase.
-  function schedule() {
-    var t = ctx.currentTime + 0.08;
+  function render() {
     var beats = 0;
     var i;
+    for (i = 0; i < MELODY.length; i++) beats += MELODY[i][1];
+    var total = Math.ceil(beats * BEAT * RATE) + RATE; // a beat of air at the end
+    var buf = new Float32Array(total);
 
+    // Melody, square wave, with a short attack and a decay so it reads as an
+    // instrument rather than a beep.
+    var at = 0;
     for (i = 0; i < MELODY.length; i++) {
-      var name = MELODY[i][0];
+      var freq = NOTE[MELODY[i][0]];
       var len = MELODY[i][1] * BEAT;
-      tone(NOTE[name], t + beats * BEAT, len, 'square', 0.5);
-      beats += MELODY[i][1];
+      var n = Math.floor(len * RATE);
+      if (freq) {
+        for (var s = 0; s < n; s++) {
+          var t = s / RATE;
+          var env = Math.min(1, t / 0.015) * Math.max(0, 1 - t / (len * 0.98));
+          var idx = at + s;
+          if (idx < total) buf[idx] += square((freq * t) % 1) * env * 0.5;
+        }
+      }
+      at += n;
     }
 
+    // Bass, triangle, two notes to the bar underneath.
     for (i = 0; i < BASS.length; i++) {
-      var at = t + i * 4 * BEAT;
-      if (i * 4 >= beats) break;
-      tone(NOTE[BASS[i]], at, BEAT * 1.6, 'triangle', 0.75);
-      tone(NOTE[BASS[i]], at + 2 * BEAT, BEAT * 1.6, 'triangle', 0.55);
+      var bf = NOTE[BASS[i]];
+      var barAt = Math.floor(i * 4 * BEAT * RATE);
+      if (barAt >= total) break;
+      for (var half = 0; half < 2; half++) {
+        var start = barAt + Math.floor(half * 2 * BEAT * RATE);
+        var bn = Math.floor(BEAT * 1.6 * RATE);
+        for (var bs = 0; bs < bn; bs++) {
+          var bt = bs / RATE;
+          var benv = Math.min(1, bt / 0.02) * Math.max(0, 1 - bt / (BEAT * 1.55));
+          var bi = start + bs;
+          if (bi < total) buf[bi] += triangle((bf * bt) % 1) * benv * (half ? 0.4 : 0.6);
+        }
+      }
     }
 
-    var total = beats * BEAT;
-    timer = setTimeout(function () { if (playing) schedule(); }, (total + 0.6) * 1000);
+    return buf;
   }
 
-  // iOS will not let a context make sound until a real buffer has been played
-  // from inside a user gesture, no matter how many times resume() is called.
-  // This is the standard unlock, and it is silent and instant.
-  function unlock() {
+  // 16-bit mono PCM in a WAV wrapper. Written by hand because the alternative
+  // is shipping an encoder to produce forty-four known bytes.
+  function toWav(samples) {
+    var n = samples.length;
+    var out = new ArrayBuffer(44 + n * 2);
+    var view = new DataView(out);
+    var write = function (off, str) {
+      for (var i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i));
+    };
+    write(0, 'RIFF');
+    view.setUint32(4, 36 + n * 2, true);
+    write(8, 'WAVE');
+    write(12, 'fmt ');
+    view.setUint32(16, 16, true);        // PCM header size
+    view.setUint16(20, 1, true);         // format: PCM
+    view.setUint16(22, 1, true);         // channels: mono
+    view.setUint32(24, RATE, true);
+    view.setUint32(28, RATE * 2, true);  // byte rate
+    view.setUint16(32, 2, true);         // block align
+    view.setUint16(34, 16, true);        // bits per sample
+    write(36, 'data');
+    view.setUint32(40, n * 2, true);
+    for (var i = 0; i < n; i++) {
+      var v = Math.max(-1, Math.min(1, samples[i] * LEVEL));
+      view.setInt16(44 + i * 2, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+    }
+    return new Blob([out], { type: 'audio/wav' });
+  }
+
+  // --- the element ---------------------------------------------------------
+
+  function build() {
+    if (ready) return;
     try {
-      var buf = ctx.createBuffer(1, 1, 22050);
-      var src = ctx.createBufferSource();
-      src.buffer = buf;
-      src.connect(ctx.destination);
-      src.start(0);
-    } catch (e) { /* older engine, resume on its own will have to do */ }
+      audio = document.createElement('audio');
+      audio.loop = true;
+      audio.preload = 'auto';
+      // Without this iOS takes over the screen with its own player.
+      audio.setAttribute('playsinline', '');
+      audio.src = URL.createObjectURL(toWav(render()));
+      audio.load();
+      var box = document.querySelector('.midibox');
+      if (box) box.appendChild(audio);
+      ready = true;
+    } catch (e) {
+      say('AUDIO UNAVAILABLE IN THIS BROWSER');
+    }
   }
 
-  function begin() {
-    if (playing) return;
-    playing = true;
-    stoppedByUser = false;
-    try { sessionStorage.removeItem('midiOff'); } catch (e) {}
-    render();
-    schedule();
+  function say(text) {
+    var status = el('midiStatus');
+    if (status) status.textContent = text;
   }
 
-  function play() {
-    if (playing) return;
-    if (!ensureContext()) return;
-    unlock();
-    if (ctx.state !== 'suspended') return begin();
-    // resume() has to be called synchronously inside the gesture; only its
-    // resolution is async. A rejection means the browser refused, which is a
-    // decision rather than a failure.
-    var p = ctx.resume();
-    if (p && p.then) p.then(begin).catch(function () { render(); });
-    else begin();
+  function paint() {
+    var btn = el('midiToggle');
+    if (!btn) return;
+    var on = audio && !audio.paused;
+    btn.textContent = on ? '■ STOP' : '▶ PLAY';
+    say((on ? 'NOW PLAYING' : 'STOPPED') + ': internationale.mid');
   }
 
-  // Best effort, and usually refused. Browsers block audio that no gesture
-  // asked for, and mobile blocks it categorically, so this succeeds only where
-  // the visitor already has enough history with the site. The armed first
-  // touch below is the path that actually carries.
-  function tryAutoplay() {
-    if (stoppedByUser || playing) return;
-    if (!ensureContext()) return;
-    if (ctx.state === 'running') return begin();
-    var p = ctx.resume();
-    if (p && p.then) {
-      p.then(function () { if (ctx.state === 'running') begin(); }).catch(function () {});
+  function start() {
+    build();
+    if (!audio) return;
+    var p = audio.play();
+    if (p && p.catch) {
+      p.then(function () {
+        stoppedByUser = false;
+        try { sessionStorage.removeItem('midiOff'); } catch (e) {}
+        paint();
+      }).catch(function (err) {
+        // A refusal is a decision, not a crash, and saying which one it was
+        // turns "it does not work" into something fixable.
+        var why = err && err.name === 'NotAllowedError'
+          ? 'BLOCKED BY BROWSER, PRESS PLAY'
+          : 'COULD NOT START: ' + ((err && err.name) || 'UNKNOWN');
+        say(why);
+      });
+    } else {
+      paint();
     }
   }
 
   function stop(byUser) {
-    playing = false;
-    clearTimeout(timer);
-    timer = null;
-    if (ctx) {
-      // Closing kills every scheduled note at once, which is what STOP should
-      // do. A fresh context is built on the next play.
-      try { ctx.close(); } catch (e) {}
-      ctx = null;
-      master = null;
-    }
+    if (audio) { audio.pause(); audio.currentTime = 0; }
     if (byUser) {
       stoppedByUser = true;
       try { sessionStorage.setItem('midiOff', '1'); } catch (e) {}
     }
-    render();
-  }
-
-  function render() {
-    var status = el('midiStatus');
-    var btn = el('midiToggle');
-    if (!status || !btn) return;
-    status.textContent = playing
-      ? 'NOW PLAYING: internationale.mid'
-      : 'STOPPED: internationale.mid';
-    btn.textContent = playing ? '■ STOP' : '▶ PLAY';
+    paint();
   }
 
   function init() {
     var btn = el('midiToggle');
     if (btn) {
       btn.addEventListener('click', function () {
-        if (playing) stop(true); else play();
+        if (audio && !audio.paused) stop(true); else start();
       });
     }
-    render();
 
-    // Ask to start unprompted, then arm for the gesture that will actually be
-    // allowed to. `pointerdown` and `touchend` are both here because a tap is
-    // the only thing that ever unlocks audio on a phone, and `click` alone
-    // arrives too late on some versions of mobile Safari.
-    tryAutoplay();
+    // Building at load, outside any gesture, is the whole point: iOS wants
+    // play() called synchronously when the finger lands, so there must be
+    // nothing left to compute by then.
+    build();
+    paint();
 
+    // Arm. pointerdown and touchend are both here because a tap is the only
+    // gesture a phone will honour, and click alone lands too late on some
+    // versions of mobile Safari.
     var events = ['pointerdown', 'touchend', 'click', 'keydown'];
     var arm = function (ev) {
-      // The button runs its own handler. Without this, one tap would start the
-      // music here and then immediately toggle it off there.
+      // The button runs its own handler. Without this one tap would start the
+      // music here and toggle it straight back off there.
       if (ev && ev.target && ev.target.closest && ev.target.closest('#midiToggle')) return;
       events.forEach(function (e) { document.removeEventListener(e, arm); });
-      if (!stoppedByUser && !playing) play();
+      if (!stoppedByUser && (!audio || audio.paused)) start();
     };
     events.forEach(function (e) { document.addEventListener(e, arm, { passive: true }); });
+
+    if (audio) {
+      audio.addEventListener('play', paint);
+      audio.addEventListener('pause', paint);
+    }
   }
 
   if (document.readyState === 'loading') {

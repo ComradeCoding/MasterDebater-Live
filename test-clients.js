@@ -594,6 +594,11 @@ async function runHomesite() {
     (await rawGet('/', 'www.comradecoding.com')).body.includes('COMRADECODING.COM'));
   check('the homepage bans inline script', /script-src 'self'/.test(home.csp || '') && !/unsafe-inline/.test((home.csp || '').split('style-src')[0]), home.csp);
   check('the homepage links to MasterDebater', /masterdebater/i.test(home.body));
+  // The music is synthesized into a blob and played through an <audio>
+  // element. Without media-src the policy blocks it and the only symptom the
+  // visitor gets is silence.
+  check('the homepage policy allows its synthesized audio',
+    /media-src[^;]*blob:/.test(home.csp || ''), home.csp);
 
   // --- crawlers ------------------------------------------------------------
   const robots = await rawGet('/robots.txt', 'comradecoding.com');

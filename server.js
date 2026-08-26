@@ -958,6 +958,10 @@ const securityHeaders = (scriptSrc) => ({
   'Content-Security-Policy':
     `default-src 'none'; script-src ${scriptSrc}; style-src 'unsafe-inline'; ` +
     "img-src 'self' data:; connect-src 'self' ws: wss:; " +
+    // The homepage synthesizes its music and hands it to an <audio> element as
+    // a blob. Without this, default-src 'none' blocks it and the only symptom
+    // is silence.
+    "media-src blob:; " +
     "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
