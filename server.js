@@ -934,7 +934,9 @@ const hostOf = (req) => String(req.headers.host || '').toLowerCase().split(':')[
 // root whatever host asked for them. Explicit rather than a fallback search,
 // so a name colliding with an app asset can never quietly shadow it.
 const HOME_ASSETS = new Set([
-  '/midi.js', '/marx.gif', '/sickle.gif', '/trotsky.png', '/manifesto.gif',
+  '/midi.js',
+  '/marx.gif', '/bowie.png', '/sickle.gif', '/trotsky.png',
+  '/manifesto.gif', '/guestbook.gif', '/ring.png',
 ]);
 
 const MIME = {

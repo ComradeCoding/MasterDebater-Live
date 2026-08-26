@@ -598,7 +598,8 @@ async function runHomesite() {
   // The clip art is the only thing the page loads, and it loads by absolute
   // path, so it has to serve from the home root on every host exactly as the
   // script does.
-  for (const asset of ['/marx.gif', '/sickle.gif', '/trotsky.png', '/manifesto.gif']) {
+  for (const asset of ['/marx.gif', '/bowie.png', '/sickle.gif', '/trotsky.png',
+                       '/manifesto.gif', '/guestbook.gif', '/ring.png']) {
     const onHome = await rawGet(asset, 'comradecoding.com');
     const elsewhere = await rawGet(asset, 'debate.comradecoding.com');
     check(`${asset} serves on both hosts`,

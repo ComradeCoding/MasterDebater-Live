@@ -12,8 +12,8 @@
      A Geocities homepage, rebuilt with modern CSS wearing period clothing.
      Every animation runs on steps() so it flickers like an 8-frame GIF
      instead of tweening like it was made after 2003. Most of the clip art is
-     drawn in CSS out of borders and gradients; the four real images are
-     genuine period clip art, requisitioned deliberately.
+     drawn in CSS out of borders and gradients; the six real images are clip
+     art the owner chose, requisitioned deliberately.
   ------------------------------------------------------------------------- */
 
   * { box-sizing: border-box; }
@@ -63,6 +63,17 @@
     width: 104px;
     z-index: 5;
     mix-blend-mode: screen;
+    pointer-events: none;
+  }
+
+  /* Ziggy, holding down the opposite corner. Already cut out against alpha, so
+     unlike Marx he needs no blending to sit on the page. */
+  .bowie {
+    position: fixed;
+    top: 36px;
+    right: 8px;
+    width: 104px;
+    z-index: 5;
     pointer-events: none;
   }
 
@@ -201,7 +212,7 @@
 
   /* Genuine clip art, supplied by the owner of the site. The sickle is a real
      72-frame animated GIF, which no amount of CSS could impersonate as well as
-     the thing itself. With Marx in the corner and the book below, four images load. */
+     the thing itself. Six images load in all, which is most of the page weight. */
   .ic-sickle {
     width: 18px;
     height: 18px;
@@ -246,33 +257,22 @@
     50% { background: #ff8866; box-shadow: 0 0 7px 3px rgba(255,45,0,.85); }
   }
 
-  /* Envelope, flap flipping open and shut. */
-  .ic-mail { background: #ffcc00; border: 1px solid #663300; }
-  .ic-mail::after {
-    content: "";
-    position: absolute;
-    left: 0; right: 0; top: 0;
-    height: 9px;
-    background: #fff0b3;
-    border-bottom: 1px solid #663300;
-    clip-path: polygon(0 0, 100% 0, 50% 100%);
-    animation: flap .9s steps(2) infinite;
+  /* The guestbook mouse, straight off a 1998 links page. Wider than it is
+     tall once the book is open, so it gets its own proportions. */
+  .ic-mouse {
+    width: 26px;
+    height: 26px;
+    vertical-align: -8px;
+    background: url("/guestbook.gif") center/contain no-repeat;
   }
-  @keyframes flap { 50% { clip-path: polygon(0 0, 100% 0, 50% 0); } }
 
-  /* One gold ring, drawn rather than photographed. A conic gradient makes the
-     metal and the mask punches the hole; spinning it walks the glint round the
-     band. A photoreal render would be the only thing here from this century. */
+  /* The one ring. A perspective render, so it is left still: rotating it in
+     the plane of the screen would spin the photograph, not the object. */
   .ic-ring {
-    width: 20px;
-    height: 20px;
-    vertical-align: -5px;
-    border-radius: 50%;
-    background: conic-gradient(#5c3d00, #ffe680, #b8860b, #fff3c4,
-                               #8b6508, #ffe680, #5c3d00);
-    -webkit-mask: radial-gradient(circle, transparent 34%, #000 36%);
-    mask: radial-gradient(circle, transparent 34%, #000 36%);
-    animation: spin 1.6s steps(8) infinite;
+    width: 26px;
+    height: 26px;
+    vertical-align: -7px;
+    background: url("/ring.png") center/contain no-repeat;
   }
 
   .feature {
@@ -411,7 +411,7 @@
     * { animation: none !important; }
     marquee { overflow: hidden; }
   }
-  @media (max-width: 900px) { .marx { width: 74px; } }
+  @media (max-width: 900px) { .marx, .bowie { width: 74px; } }
   @media (max-width: 640px) {
     table.layout, td.nav, td.main { display: block; width: 100%; }
     h1 { font-size: 34px; }
@@ -419,12 +419,14 @@
     /* He would dance on top of the manifesto at phone width, so he shrinks
        into the corner rather than over the text. */
     .marx { width: 52px; top: 30px; left: 2px; }
+    .bowie { width: 52px; top: 30px; right: 2px; }
   }
 </style>
 </head>
 <body>
 
 <img class="marx" src="/marx.gif" alt="">
+<img class="bowie" src="/bowie.png" alt="">
 
 <div class="topbar">
   <marquee scrollamount="6">&#9733; WORKERS OF THE WORLD WIDE WEB, UNITE! &#9733; YOU HAVE NOTHING TO LOSE BUT YOUR DIAL-UP CONNECTION! &#9733; NOW SERVING THE GLORIOUS INTERNET SINCE 1997 &#9733;</marquee>
@@ -448,7 +450,7 @@
           <li><span class="ic ic-trotsky" aria-hidden="true"></span><a href="/arena">MasterDebater&nbsp;Live</a> <span class="starburst">NEW!!</span></li>
           <li><span class="ic ic-book" aria-hidden="true"></span><a href="#manifesto">The Manifesto</a></li>
           <li><span class="ic ic-star" aria-hidden="true"></span><a href="#plan">Five Year Plan</a></li>
-          <li><span class="ic ic-mail" aria-hidden="true"></span><a href="#guestbook">Guestbook</a></li>
+          <li><span class="ic ic-mouse" aria-hidden="true"></span><a href="#guestbook">Guestbook</a></li>
           <li><span class="ic ic-ring" aria-hidden="true"></span><a href="#webring">Webring</a></li>
         </ul>
         <hr class="divider">
@@ -547,7 +549,7 @@
   </div>
 
   <div id="guestbook" style="margin:10px 0;">
-    <b><span class="ic ic-mail" aria-hidden="true"></span>GUESTBOOK:</b> temporarily collectivized.
+    <b><span class="ic ic-mouse" aria-hidden="true"></span>GUESTBOOK:</b> temporarily collectivized.
     <span class="blink">Sign it by joining a debate.</span>
   </div>
 
@@ -563,7 +565,7 @@
 
   <div class="footer">
     &copy; 1997-2026 The Collective. No rights reserved; property is theft.<br>
-    This page was hand-typed by the workers of ComradeCoding. Three animated GIFs were requisitioned for the cause, and they are most of the weight.<br>
+    This page was hand-typed by the workers of ComradeCoding. The clip art was requisitioned for the cause and is most of the weight.<br>
     <a href="/arena">MasterDebater Live</a> is a ComradeCoding production.
   </div>
 
