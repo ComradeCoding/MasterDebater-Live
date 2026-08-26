@@ -60,7 +60,6 @@
     position: fixed;
     top: 36px;
     left: 8px;
-    width: 104px;
     z-index: 5;
     mix-blend-mode: screen;
     pointer-events: none;
@@ -72,10 +71,19 @@
     position: fixed;
     top: 36px;
     right: 8px;
-    width: 104px;
     z-index: 5;
     pointer-events: none;
   }
+
+  /* Matched on height, not width. Marx is the narrower picture, so equal
+     widths would leave him towering over Ziggy; equal heights make them read
+     as a pair. Widths then follow from each source. */
+  .marx, .bowie { height: 480px; width: auto; }
+  /* Stepped down before they reach the text column rather than after. Ziggy
+     is the wider picture, so he is the one these thresholds are set by. */
+  @media (max-width: 1600px) { .marx, .bowie { height: 380px; } }
+  @media (max-width: 1350px) { .marx, .bowie { height: 300px; } }
+  @media (max-width: 1100px) { .marx, .bowie { height: 220px; } }
 
   /* ------------------------------------------------------------- banner -- */
 
@@ -411,15 +419,16 @@
     * { animation: none !important; }
     marquee { overflow: hidden; }
   }
-  @media (max-width: 900px) { .marx, .bowie { width: 74px; } }
+  @media (max-width: 900px) { .marx, .bowie { height: 170px; } }
   @media (max-width: 640px) {
     table.layout, td.nav, td.main { display: block; width: 100%; }
     h1 { font-size: 34px; }
     .sickle { font-size: 64px; }
     /* He would dance on top of the manifesto at phone width, so he shrinks
        into the corner rather than over the text. */
-    .marx { width: 52px; top: 30px; left: 2px; }
-    .bowie { width: 52px; top: 30px; right: 2px; }
+    .marx, .bowie { height: 120px; top: 30px; }
+    .marx { left: 2px; }
+    .bowie { right: 2px; }
   }
 </style>
 </head>
@@ -514,12 +523,37 @@
         nothing to lose but your chains, your rent, and your subscription fees.</p>
 
         <h3 id="plan"><span class="ic ic-star" aria-hidden="true"></span>THE FIVE YEAR PLAN</h3>
+        <p style="text-align:left; font-size:13px;">A programme of transitional
+        demands, in the Trotskyist tendency. Each one is winnable under the
+        present order and none of them can be digested by it, which is the
+        point of writing them this way.</p>
         <ul class="plan">
-          <li>&#9745; <b>Year one:</b> seize the domain. The means of publication, however modest, belong in the hands of the worker who uses them.</li>
-          <li>&#9745; <b>Year two:</b> build it by hand and in the open. No trackers, no ad tech, nothing sold behind the reader's back.</li>
-          <li>&#9744; <b>Year three:</b> help one more person raise a site of their own. A web of many small pages is far harder to buy than one large one.</li>
-          <li>&#9744; <b>Year four:</b> collectivize the guestbook. Somewhere to argue in public is a public good.</li>
-          <li>&#9744; <b>Year five:</b> full communism. Failing that, a mailing list.</li>
+          <li>&#9744; <b>Year one: a party of our own.</b> Labour has bankrolled
+          two capitalist parties for a century and been thanked with flat wages
+          and a shrinking pension. Break with both. Build a workers' party on
+          the unions, running its own candidates and answerable to its own
+          members rather than to donors.</li>
+
+          <li>&#9744; <b>Year two: the unions belong to the ranks.</b> Every
+          official elected, recallable at any time, and paid the average wage of
+          the members they speak for. A leadership that lives like management
+          will keep bargaining like management.</li>
+
+          <li>&#9744; <b>Year three: a sliding scale of wages and hours.</b> Pay
+          tied to the real cost of living, so a raise is not repossessed at the
+          grocery store. The work that exists shared among every pair of hands
+          that needs it, with no cut in pay. Unemployment is not a personal
+          failing; it is a distribution that somebody chose.</li>
+
+          <li>&#9744; <b>Year four: open the books.</b> Any firm that pleads
+          poverty against a wage claim opens its accounts to the people who
+          produced the money. Where it shuts the doors anyway, the workers keep
+          the plant running. You cannot argue with an audit.</li>
+
+          <li>&#9744; <b>Year five: no socialism in one country.</b> A
+          revolution that halts at the border has agreed to be besieged. The
+          bosses coordinate across every ocean and expect us to organise one
+          state at a time. The task is international or it is nothing.</li>
         </ul>
         <p style="font-size:12px;">The plan is ahead of schedule. The plan has always been ahead of schedule.</p>
       </td>
