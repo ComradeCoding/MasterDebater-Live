@@ -135,20 +135,26 @@
 
   /* ------------------------------------------- under construction, forever */
 
+  /* The bar grows with its label. It used to be pinned at 22px with the text
+     absolutely positioned inside, so the moment the line wrapped, the second
+     line fell straight out of its own striped background and sat on the page.
+     Same trap as the badges: a fixed box around text that is free to wrap. */
   .construction {
-    height: 22px;
+    min-height: 22px;
     margin: 12px auto;
     background: repeating-linear-gradient(45deg, #ffcc00 0 16px, #111 16px 32px);
     border: 2px solid #000;
-    position: relative;
   }
+  /* Semi-transparent on purpose, so the hazard stripes read through the
+     darkening rather than being covered by it. */
   .construction span {
-    position: absolute;
-    inset: 0;
-    line-height: 22px;
+    display: block;
+    padding: 4px 10px;
+    text-align: center;
     font-family: Arial, sans-serif;
     font-weight: bold;
     font-size: 12px;
+    line-height: 1.25;
     color: #fff;
     background: rgba(0,0,0,.55);
   }
