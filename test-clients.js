@@ -600,6 +600,39 @@ async function runHomesite() {
   check('the homepage policy allows its synthesized audio',
     /media-src[^;]*blob:/.test(home.csp || ''), home.csp);
 
+  // --- the bouncing corner -------------------------------------------------
+  // A running page cannot be checked for this: the interesting cases are an
+  // edge hit, a window smaller than he is, and the long delta a backgrounded
+  // tab hands back on return. All three live in one pure function.
+  const bounce = require('./homesite/bounce');
+  const box = { W: 1000, H: 800, w: 200, h: 250 };
+  let s = { x: 700, y: 36, vx: -33, vy: 32 };
+  let outside = 0;
+  let turns = 0;
+  for (let i = 0; i < 4000; i++) {
+    const before = { vx: s.vx, vy: s.vy };
+    s = bounce.step(s, 1 / 60, box);
+    if (Math.sign(s.vx) !== Math.sign(before.vx) || Math.sign(s.vy) !== Math.sign(before.vy)) turns++;
+    if (s.x < bounce.MARGIN - 0.5 || s.y < bounce.MARGIN - 0.5 ||
+        s.x > box.W - box.w - bounce.MARGIN + 0.5 || s.y > box.H - box.h - bounce.MARGIN + 0.5) outside++;
+  }
+  check('he never leaves the window', outside === 0, `${outside} frames outside`);
+  check('he turns at the edges', turns >= 4, `${turns} direction changes in 66 simulated seconds`);
+
+  // A tab left in the background hands back a gap of minutes on return. Without
+  // the cap that single step would throw him far outside the window.
+  const jumped = bounce.step({ x: 500, y: 400, vx: -33, vy: 32 }, 600, box);
+  check('a long gap between frames cannot fling him out of the window',
+    jumped.x >= bounce.MARGIN && jumped.y >= bounce.MARGIN &&
+    jumped.x <= box.W - box.w && jumped.y <= box.H - box.h, JSON.stringify(jumped));
+
+  // Narrower than he is: he should settle, not vibrate against both walls.
+  const tight = { W: 100, H: 100, w: 200, h: 250 };
+  let t1 = bounce.step({ x: 50, y: 50, vx: -33, vy: 32 }, 1 / 60, tight);
+  const t2 = bounce.step(t1, 1 / 60, tight);
+  check('a window smaller than he is parks him instead of jittering',
+    t1.x === t2.x && t1.y === t2.y, JSON.stringify([t1, t2]));
+
   // --- crawlers ------------------------------------------------------------
   const robots = await rawGet('/robots.txt', 'comradecoding.com');
   check('robots.txt is served',
@@ -621,7 +654,7 @@ async function runHomesite() {
   // path, so it has to serve from the home root on every host exactly as the
   // script does.
   for (const asset of ['/marx.gif', '/bowie.png', '/sickle.gif', '/trotsky.png',
-                       '/manifesto.gif', '/guestbook.gif', '/ring.png']) {
+                       '/manifesto.gif', '/guestbook.gif', '/ring.png', '/bounce.js']) {
     const onHome = await rawGet(asset, 'comradecoding.com');
     const elsewhere = await rawGet(asset, 'debate.comradecoding.com');
     check(`${asset} serves on both hosts`,

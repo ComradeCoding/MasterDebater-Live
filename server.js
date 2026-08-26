@@ -936,7 +936,7 @@ const hostOf = (req) => String(req.headers.host || '').toLowerCase().split(':')[
 const HOME_ASSETS = new Set([
   '/midi.js',
   '/marx.gif', '/bowie.png', '/sickle.gif', '/trotsky.png',
-  '/manifesto.gif', '/guestbook.gif', '/ring.png',
+  '/manifesto.gif', '/guestbook.gif', '/ring.png', '/bounce.js',
 ]);
 
 const MIME = {
