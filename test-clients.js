@@ -594,6 +594,8 @@ async function runHomesite() {
     (await rawGet('/', 'www.comradecoding.com')).body.includes('COMRADECODING.COM'));
   check('the homepage bans inline script', /script-src 'self'/.test(home.csp || '') && !/unsafe-inline/.test((home.csp || '').split('style-src')[0]), home.csp);
   check('the homepage links to MasterDebater', /masterdebater/i.test(home.body));
+  check('the homepage links to Athletics',
+    /href="https:\/\/foot\.comradecoding\.com">Athletics<\/a>/.test(home.body));
   // The music is synthesized into a blob and played through an <audio>
   // element. Without media-src the policy blocks it and the only symptom the
   // visitor gets is silence.
