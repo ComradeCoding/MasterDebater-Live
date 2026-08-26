@@ -295,10 +295,28 @@ and `/arena` is the app on any host, which is what puts MasterDebater at
 `/d/` permalinks sit above the split entirely, so a settled debate shares from
 either domain.
 
-The homepage is one file, no images and no script, served under
-`script-src 'none'`. It is a Geocities pastiche done honestly: the animations
-run on `steps()` so they flicker like 8-frame GIFs, the marquee tags are real,
-and the table layout is load-bearing on purpose.
+The homepage ships no images. It is a Geocities pastiche done honestly: the
+animations run on `steps()` so they flicker like 8-frame GIFs, the marquee tags
+are real, and the table layout is load-bearing on purpose.
+
+It carries one script, `midi.js`, which synthesizes The Internationale with two
+oscillators rather than shipping or embedding audio. The composition (De Geyter,
+1888) is public domain; no recording of anyone's performance is involved, and
+nothing is downloaded to play it. The script sits in its own file rather than
+inline, so the page runs under `script-src 'self'` and inline execution stays
+banned, which is still tighter than the app's `'unsafe-inline'`.
+
+Browsers refuse to start audio without a user gesture, so the page cannot blare
+on load the way a real Geocities page did. It arms instead and starts on the
+first click anywhere, and a visitor who presses STOP is remembered for the
+session. The melody is a table of notes at the top of `midi.js`, reconstructed
+by ear, so any wrong note is a one line fix.
+
+`HOME_ASSETS` lists the files that belong to the homepage rather than the app.
+They serve from the home root on every host, because the page reaches other
+hosts by path at `/home` while its markup still asks for `/midi.js` at the root.
+Without that the page renders silent everywhere except the bare domain, which is
+the one place you would not think to check.
 
 `HOME_HOSTS` overrides the routed hostnames, comma-separated, if the umbrella
 ever moves.

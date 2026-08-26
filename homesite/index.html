@@ -249,6 +249,51 @@
 
   marquee { display: block; }
 
+  /* ---------------------------------------------------------- the stereo -- */
+  /* Beige plastic hi-fi, rendered in bevels. The one control on the page that
+     does something, so it gets to look like hardware. */
+
+  .midibox {
+    max-width: 560px;
+    margin: 16px auto;
+    background: #3a0000;
+    border: 4px outset #cc0000;
+    padding: 8px;
+  }
+  .midihead {
+    font-family: Arial, sans-serif;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    color: #ffcc00;
+    margin-bottom: 6px;
+  }
+  .midirow { display: flex; align-items: center; gap: 8px; }
+  #midiToggle {
+    flex: 0 0 auto;
+    font-family: "Courier New", monospace;
+    font-size: 13px;
+    font-weight: bold;
+    color: #33ff33;
+    background: #000;
+    border: 3px outset #777;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  #midiToggle:active { border-style: inset; }
+  #midiToggle:hover { color: #ffcc00; }
+  /* The LCD strip the readout scrolls across. */
+  .midimarquee {
+    flex: 1 1 auto;
+    min-width: 0;
+    background: #001100;
+    border: 3px inset #777;
+    padding: 5px 0;
+    font-family: "Courier New", monospace;
+    font-size: 12px;
+    color: #33ff33;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; }
     marquee { overflow: hidden; }
@@ -387,7 +432,13 @@
     <span class="blink">Sign it by joining a debate.</span>
   </div>
 
-  <marquee scrollamount="4" style="color:#ffcc00; font-size:13px;">&#9835; now playing: internationale.mid (8kb, worth the wait) &#9835;</marquee>
+  <div class="midibox">
+    <div class="midihead">&#9835; SOUND SYSTEM OF THE PEOPLE &#9835;</div>
+    <div class="midirow">
+      <button id="midiToggle" type="button">&#9654; PLAY</button>
+      <marquee class="midimarquee" scrollamount="4"><span id="midiStatus">STOPPED: internationale.mid</span> &nbsp;&#9835;&nbsp; L'Internationale, Pierre De Geyter, 1888 &nbsp;&#9835;&nbsp; synthesized live in your browser, 0 kb downloaded &nbsp;&#9835;&nbsp;</marquee>
+    </div>
+  </div>
 
   <hr class="divider">
 
@@ -399,5 +450,6 @@
 
 </div>
 
+<script src="/midi.js"></script>
 </body>
 </html>

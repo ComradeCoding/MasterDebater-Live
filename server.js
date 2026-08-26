@@ -930,6 +930,10 @@ const HOME_HOSTS = new Set(
     .split(',').map((h) => h.trim().toLowerCase()).filter(Boolean)
 );
 const hostOf = (req) => String(req.headers.host || '').toLowerCase().split(':')[0];
+// Files belonging to the homepage rather than the app, served from the home
+// root whatever host asked for them. Explicit rather than a fallback search,
+// so a name colliding with an app asset can never quietly shadow it.
+const HOME_ASSETS = new Set(['/midi.js']);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -1007,6 +1011,14 @@ const server = http.createServer((req, res) => {
   // stay above this split, so an archived debate shares from either domain.
   let docRoot = PUBLIC_DIR;
   if (HOME_HOSTS.has(hostOf(req))) docRoot = HOME_DIR;
+
+  // The homepage's own assets resolve from the home root on every host. The
+  // page reaches other hosts by path, at /home, but its markup asks for
+  // /midi.js at the root, and without this that request lands in the app's
+  // root and 404s. The page then renders silent everywhere except the bare
+  // domain, which is the one place nobody tests first.
+  if (HOME_ASSETS.has(urlPath)) docRoot = HOME_DIR;
+
   if (urlPath === '/home' || urlPath === '/home/') {
     docRoot = HOME_DIR;
     urlPath = '/';
@@ -1032,9 +1044,10 @@ const server = http.createServer((req, res) => {
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
     res.writeHead(200, {
-      // The homepage carries no script at all, so it runs under the permalink
-      // CSP; only the app page needs its one inline block allowed.
-      ...securityHeaders(docRoot === HOME_DIR ? "'none'" : "'unsafe-inline'"),
+      // The homepage keeps its script in a file rather than inline, so it can
+      // run under 'self' and still ban inline execution. Only the app page,
+      // which is one document with its logic inside it, needs 'unsafe-inline'.
+      ...securityHeaders(docRoot === HOME_DIR ? "'self'" : "'unsafe-inline'"),
       'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
     });
     res.end(req.method === 'HEAD' ? undefined : data);

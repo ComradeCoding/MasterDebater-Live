@@ -587,8 +587,18 @@ async function runHomesite() {
     home.status === 200 && home.body.includes('COMRADECODING.COM'), String(home.status));
   check('www serves the homepage too',
     (await rawGet('/', 'www.comradecoding.com')).body.includes('COMRADECODING.COM'));
-  check('the homepage runs no script', /script-src 'none'/.test(home.csp || ''), home.csp);
+  check('the homepage bans inline script', /script-src 'self'/.test(home.csp || '') && !/unsafe-inline/.test((home.csp || '').split('style-src')[0]), home.csp);
   check('the homepage links to MasterDebater', /masterdebater/i.test(home.body));
+
+  const midi = await rawGet('/midi.js', 'comradecoding.com');
+  check('the homepage script is served on the home host',
+    midi.status === 200 && midi.body.includes('internationale'), String(midi.status));
+  // The page reaches other hosts by path but asks for its script at the root,
+  // so this must serve everywhere or /home renders silent off the bare domain.
+  const midiElsewhere = await rawGet('/midi.js', 'debate.comradecoding.com');
+  check('the homepage script is served on any host',
+    midiElsewhere.status === 200 && midiElsewhere.body.includes('internationale'),
+    String(midiElsewhere.status));
 
   const app = await rawGet('/', 'debate.comradecoding.com');
   check('any other host still serves the app',
