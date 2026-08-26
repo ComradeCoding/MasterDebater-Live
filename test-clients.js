@@ -3,7 +3,7 @@
 // Protocol-level end-to-end tests for MasterDebater Live.
 //
 // Drives real WebSocket clients against a real server using Node 22's built-in
-// global WebSocket — no test framework, no dependencies.
+// global WebSocket. No test framework, no dependencies.
 //
 //   node test-clients.js                    # spawns its own server on :3111
 //   TEST_URL=ws://localhost:3000 node test-clients.js   # use a running server
@@ -18,6 +18,24 @@ const URL = process.env.TEST_URL || `ws://localhost:${TEST_PORT}`;
 const SPAWN_SERVER = !process.env.TEST_URL;
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// The permalink is plain HTTP, so the transport checks below are ordinary
+// fetches rather than protocol messages.
+const HTTP_ORIGIN = URL.replace(/^ws/, 'http');
+async function fetchText(p) {
+  const res = await fetch(HTTP_ORIGIN + p);
+  return {
+    status: res.status,
+    body: await res.text(),
+    csp: res.headers.get('content-security-policy'),
+  };
+}
+
+// Archived debates are real files. Tests write to a throwaway directory so a
+// run never lands in the developer's own archive.
+const ARCHIVE_DIR = path.join(
+  require('os').tmpdir(), `debate-test-archive-${process.pid}`
+);
 
 let failures = 0;
 let checks = 0;
@@ -81,7 +99,7 @@ function makeClient(label) {
 async function startServer() {
   if (!SPAWN_SERVER) return null;
   const proc = spawn(process.execPath, [path.join(__dirname, 'server.js')], {
-    env: { ...process.env, PORT: String(TEST_PORT) },
+    env: { ...process.env, PORT: String(TEST_PORT), ARCHIVE_DIR },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   await new Promise((resolve, reject) => {
@@ -285,6 +303,135 @@ async function run() {
   // --- cleanup ------------------------------------------------------------
   [bob, carol, dave].forEach((c) => c.close());
   await wait(200);
+
+  await runVerdict();
+}
+
+// ==========================================================================
+// The verdict: entry stance, conclusion, archive, permalink
+// ==========================================================================
+
+async function runVerdict() {
+  const pro = makeClient('pro');
+  const con = makeClient('con');
+  // Four in the audience with known opening stances, so the arithmetic below
+  // is checked against a hand-computed answer rather than against itself.
+  const v1 = makeClient('v1'); // undecided → pro
+  const v2 = makeClient('v2'); // con       → pro   (crosses the floor)
+  const v3 = makeClient('v3'); // pro       → pro   (never moves)
+  const v4 = makeClient('v4'); // undecided → con, then leaves before the end
+  await Promise.all([pro.open, con.open, v1.open, v2.open, v3.open, v4.open]);
+
+  const { roomId } = await pro.emit('room:create', { topic: 'Homework should be abolished' });
+
+  await pro.emit('room:join', { roomId, name: 'Nadia', stance: 'pro', voterId: 'w-pro' });
+  await con.emit('room:join', { roomId, name: 'Roman', stance: 'con', voterId: 'w-con' });
+  const j1 = await v1.emit('room:join', { roomId, name: 'V1', stance: 'undecided', voterId: 'w-1' });
+  await v2.emit('room:join', { roomId, name: 'V2', stance: 'con', voterId: 'w-2' });
+  await v3.emit('room:join', { roomId, name: 'V3', stance: 'pro', voterId: 'w-3' });
+  await v4.emit('room:join', { roomId, name: 'V4', stance: 'undecided', voterId: 'w-4' });
+
+  check('an opening stance is recorded at join', j1.myEntry === null && j1.myLean === null);
+  const j2again = await v2.emit('room:join', { roomId, name: 'V2', stance: 'pro', voterId: 'w-2' });
+  check('an entry stance cannot be rewritten by re-joining', j2again.myEntry === 'con',
+    JSON.stringify(j2again.myEntry));
+
+  await wait(120);
+  const tally = v1.got('room:lean').slice(-1)[0];
+  check('the live tally counts the undecided', tally && tally.undecided >= 1, JSON.stringify(tally));
+
+  // --- can't call it before there is anything to judge ---------------------
+  const early = await v1.emit('debate:conclude');
+  check('the audience cannot call it', !!early.error);
+
+  await pro.emit('seat:claim', { side: 'pro' });
+  const tooEarly = await pro.emit('debate:conclude');
+  check('cannot conclude with a seat still open', !!tooEarly.error, JSON.stringify(tooEarly));
+
+  await con.emit('seat:claim', { side: 'con' });
+  const noCase = await pro.emit('debate:conclude');
+  check('cannot conclude before both sides have spoken', !!noCase.error, JSON.stringify(noCase));
+
+  await pro.emit('debate:message', { text: 'It crowds out everything that makes a childhood.' });
+  const oneSided = await pro.emit('debate:conclude');
+  check('cannot conclude on a one-sided transcript', !!oneSided.error, JSON.stringify(oneSided));
+  await con.emit('debate:message', { text: 'Practice is how a skill stops being fragile.' });
+  // Stored raw, escaped by the renderer, the same guarantee the live page
+  // makes. Now checked on the archived copy too.
+  await v1.emit('audience:message', { text: '<script>alert(1)</script>' });
+
+  // --- the room moves ------------------------------------------------------
+  await v1.emit('audience:lean', { side: 'pro' });
+  await v2.emit('audience:lean', { side: 'pro' });
+  await v3.emit('audience:lean', { side: 'pro' });
+  await v4.emit('audience:lean', { side: 'con' });
+  await v4.emit('room:leave'); // walks out, but the ballot must still count
+  await wait(120);
+
+  // Panel is the four voters; the two debaters are struck.
+  //   open  pro 1 (v3), con 1 (v2), undecided 2 (v1, v4)  → margin  0
+  //   close pro 3 (v1, v2, v3), con 1 (v4)                → margin +2
+  const done = await con.emit('debate:conclude');
+  check('a seated debater can call it', !done.error, JSON.stringify(done));
+  const v = done.result && done.result.verdict;
+  check('the panel excludes both debaters', v && v.panel === 4, JSON.stringify(v && v.panel));
+  check('the opening tally is the stance taken at the door',
+    v && v.open.pro === 1 && v.open.con === 1 && v.open.undecided === 2, JSON.stringify(v && v.open));
+  check('the closing tally counts a voter who already left',
+    v && v.close.pro === 3 && v.close.con === 1, JSON.stringify(v && v.close));
+  check('swing is the shift in margin, not the head-count', v && v.swing === 2, String(v && v.swing));
+  check('the winner is the side that moved the room', v && v.winner === 'pro', v && v.winner);
+  check('crossing the floor is counted separately', v && v.moved.crossed === 1,
+    JSON.stringify(v && v.moved));
+  check('the record carries one headline for every renderer',
+    typeof done.result.headline === 'string' && done.result.headline.includes('Nadia'),
+    done.result.headline);
+
+  // --- a settled debate is frozen -----------------------------------------
+  await wait(120);
+  check('everyone in the room is told it concluded', v1.got('room:concluded').length === 1);
+  const afterMsg = await pro.emit('debate:message', { text: 'one more thing' });
+  check('the stage is closed once settled', !!afterMsg.error);
+  const afterChat = await v1.emit('audience:message', { text: 'wait' });
+  check('the sidebar is closed once settled', !!afterChat.error);
+  const afterLean = await v1.emit('audience:lean', { side: 'con' });
+  check('the vote is closed once settled', !!afterLean.error);
+  const afterSeat = await v3.emit('seat:claim', { side: 'pro' });
+  check('seats cannot change once settled', !!afterSeat.error);
+
+  const rejoin = await v3.emit('room:join', { roomId, name: 'V3', voterId: 'w-3' });
+  check('a settled debate cannot be re-entered', !!rejoin.error);
+  check('the rejection points at the permalink', rejoin.resultUrl === `/d/${roomId}`,
+    JSON.stringify(rejoin.resultUrl));
+
+  await wait(120);
+  const settled = v1.got('lobby:results').slice(-1)[0];
+  check('the settled list is pushed to everyone',
+    Array.isArray(settled) && settled.some((r) => r.id === roomId), JSON.stringify(settled));
+  const live = v1.got('lobby:rooms').slice(-1)[0];
+  check('a settled debate drops off the live floor',
+    Array.isArray(live) && !live.some((r) => r.id === roomId));
+
+  // --- the permalink -------------------------------------------------------
+  const page = await fetchText(`/d/${roomId}`);
+  check('the permalink serves the record', page.status === 200 && page.body.includes('Homework'),
+    String(page.status));
+  check('the permalink states the verdict', page.body.includes('+2'));
+  check('the permalink carries the transcript',
+    page.body.includes('crowds out') && page.body.includes('stops being fragile'));
+  check('the permalink runs no script', /script-src 'none'/.test(page.csp || ''), page.csp);
+
+  const missing = await fetchText('/d/000000');
+  check('an unknown permalink is a 404, not an error', missing.status === 404);
+  const traversal = await fetchText('/d/..%2F..%2Fserver.js');
+  check('a traversal attempt in the id is rejected', traversal.status === 404, String(traversal.status));
+
+  // --- markup in the record stays inert ------------------------------------
+  check('names and messages are escaped on the permalink',
+    !page.body.includes('<script>alert'), 'raw markup reached the page');
+
+  [pro, con, v1, v2, v3, v4].forEach((c) => c.close());
+  await wait(150);
 }
 
 (async () => {
@@ -297,6 +444,7 @@ async function run() {
     console.log(`FAIL  test harness crashed\n        ${err && err.stack ? err.stack : err}`);
   } finally {
     if (proc) proc.kill();
+    try { require('fs').rmSync(ARCHIVE_DIR, { recursive: true, force: true }); } catch {}
   }
 
   console.log(

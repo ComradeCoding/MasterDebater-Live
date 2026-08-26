@@ -10,3 +10,6 @@ SKILL.md
 node_modules/
 .env
 *.log
+
+# archived debates: real user records, not build output
+data/

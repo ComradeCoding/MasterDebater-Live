@@ -6,9 +6,9 @@
 <title>MasterDebater Live</title>
 <style>
   /* ---------------------------------------------------------------------------
-     "Paste-up" — punk flyer, photocopied and stuck to a wall.
+     "Paste-up": punk flyer, photocopied and stuck to a wall.
 
-     One loud thing: the ransom headline. Everything else is disciplined —
+     One loud thing: the ransom headline. Everything else is disciplined:
      a single hard-shadow offset (4px, no blur), a single rotation (-1.5deg),
      one spacing scale. Punk gets its attitude from contrast and nerve, not
      from every element shouting at once.
@@ -46,7 +46,7 @@
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
-  /* Author `display` rules outrank the UA's [hidden] rule — restore it. */
+  /* Author `display` rules outrank the UA's [hidden] rule, so restore it. */
   [hidden] { display: none !important; }
 
   body {
@@ -156,7 +156,7 @@
   }
   /* Half the wordmark is a cut-out block. Same trap as the headline cut: as a
      plain inline box its background is the font's own content area, and the
-     condensed faces in the stack put their ascent right on the cap line — so
+     condensed faces in the stack put their ascent right on the cap line, so
      the block sat 1px off the tops of LIVE and 8px clear underneath, reading
      as sliced. Own leading plus em padding, weighted to the top, centres the
      word in the block without growing it. */
@@ -169,7 +169,7 @@
   }
   /* Where the browser can trim the box to the cap line and the baseline, the
      font's own ascent stops mattering and the padding below is literally the
-     gap you see — same block, evenly cut, on any face in the stack. */
+     gap you see: same block, evenly cut, on any face in the stack. */
   @supports (text-box: trim-both cap alphabetic) {
     .logo span {
       text-box: trim-both cap alphabetic;
@@ -228,11 +228,11 @@
     display: inline-block;
     vertical-align: baseline;
   }
-  /* cut 1 — plain, oversized */
+  /* cut 1: plain, oversized */
   .lobby-inner h1 .w1 { font-size: 66px; }
-  /* cut 2 — inverted block, straight */
+  /* cut 2: inverted block, straight */
   /* The h1 runs on .92 leading, which pulls this inline-block's content box
-     down to (or below) the cap line on the narrower fonts in the stack — the
+     down to (or below) the cap line on the narrower fonts in the stack, and the
      paper then reads as sliced off across the top of the letters. Give the cut
      its own leading and a little vertical padding, in em so the phone size
      scales with it, and the block clears the caps whichever font wins. */
@@ -242,7 +242,7 @@
     color: var(--ink);
     line-height: 1;
     /* No descenders in "a side.", so on browsers without box trimming the
-       font's own descent is all the room the underside needs — padding there
+       font's own descent is all the room the underside needs, and padding there
        just reads as slack. */
     padding: .16em 10px 0;
   }
@@ -252,7 +252,7 @@
       padding: .16em 10px .12em;
     }
   }
-  /* cut 3 — outlined, tilted, on its own line */
+  /* cut 3: outlined, tilted, on its own line */
   /* Neon tube. An outline stroke traces the glyph shape, so on a bold weight
      every stem becomes two parallel lines. A lit tube is the opposite: a solid
      hot core with the colour bleeding outward. Tracking stays open enough that
@@ -684,6 +684,148 @@
     border-bottom: 1px solid var(--rule);
   }
 
+  /* -------------------------------------------------------- the record -- */
+  /* A settled debate stops being an app and becomes a document. The card
+     replaces both composers rather than sitting above them, so there is no
+     dead input left on screen inviting input the server would reject. */
+
+  .result {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+    padding: 18px 22px;
+    background: var(--ink-2);
+    border-top: 2px solid var(--paper);
+    box-shadow: inset 0 4px 0 var(--neon-deep);
+    flex-shrink: 0;
+  }
+  .result .swing { flex-shrink: 0; text-align: center; transform: rotate(var(--tilt)); }
+  .result .swing .n {
+    display: block;
+    font-family: var(--display);
+    font-size: 52px;
+    font-stretch: 75%;
+    font-weight: 700;
+    line-height: .84;
+  }
+  .result .swing.pro .n { color: var(--pro); }
+  .result .swing.con .n { color: var(--con); }
+  .result .swing.draw .n { color: var(--dim); }
+  .result .swing .k {
+    display: block;
+    margin-top: 6px;
+    font-family: var(--data);
+    font-size: 8.5px;
+    font-weight: 700;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .result .said { flex: 1; min-width: 200px; }
+  .result .said .line {
+    font-family: var(--display);
+    font-size: 21px;
+    font-stretch: 87.5%;
+    font-weight: 700;
+    text-transform: uppercase;
+    line-height: 1.06;
+    overflow-wrap: anywhere;
+  }
+  .result .said .detail {
+    margin-top: 6px;
+    font-family: var(--data);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .result .acts { display: flex; gap: 10px; flex-shrink: 0; }
+  /* `button` styles are element-scoped, so the link needs its own rule rather
+     than a broadened base selector that would reach every anchor on the page. */
+  .result .acts a.primary {
+    font-family: var(--display);
+    font-size: 14px;
+    font-weight: 700;
+    font-stretch: 87.5%;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    text-decoration: none;
+    padding: 8px 15px;
+    background: var(--neon-deep);
+    border: 2px solid var(--neon-deep);
+    color: #fff;
+    box-shadow: var(--paste) var(--paper);
+    transition: background .1s, color .1s, box-shadow .1s, transform .1s;
+  }
+  .result .acts a.primary:hover {
+    background: var(--paper);
+    border-color: var(--paper);
+    color: var(--ink);
+    box-shadow: var(--paste) var(--neon);
+    transform: translate(-1px, -1px);
+  }
+
+  /* Armed state for the two-step. Red because the next click is irreversible. */
+  #callIt { flex-shrink: 0; }
+  #callIt.armed,
+  #callIt.armed:hover {
+    background: var(--con);
+    border-color: var(--con);
+    color: var(--ink);
+    box-shadow: var(--paste) rgba(255, 45, 63, .35);
+  }
+
+  /* Lobby: settled debates, listed under the live ones. */
+  .settled-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 18px;
+    margin-bottom: 10px;
+    background: var(--ink-2);
+    border: 2px solid var(--rule);
+    text-decoration: none;
+    color: inherit;
+    transition: border-color .1s, box-shadow .1s;
+  }
+  .settled-card:hover { border-color: var(--paper); box-shadow: var(--paste) var(--neon); }
+  .settled-card .n {
+    flex-shrink: 0;
+    width: 58px;
+    text-align: center;
+    font-family: var(--display);
+    font-size: 27px;
+    font-stretch: 75%;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .settled-card .n.pro { color: var(--pro); }
+  .settled-card .n.con { color: var(--con); }
+  .settled-card .n.draw { color: var(--dim); }
+  .settled-card .info { flex: 1; min-width: 0; }
+  .settled-card .t {
+    font-family: var(--display);
+    font-size: 17px;
+    font-stretch: 87.5%;
+    font-weight: 700;
+    text-transform: uppercase;
+    line-height: 1.1;
+    overflow-wrap: anywhere;
+  }
+  .settled-card .meta {
+    margin-top: 5px;
+    font-family: var(--data);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .settled-card .meta .pro { color: var(--pro); }
+  .settled-card .meta .con { color: var(--con); }
+
   /* ------------------------------------------------------- modal + toast -- */
 
   #modal {
@@ -716,6 +858,36 @@
     line-height: 1;
   }
   .modal-box .note { font-family: var(--read); font-size: 13.5px; color: var(--muted); }
+
+  /* The baseline reading. Undecided is pre-selected and is a real answer here,
+     not a way to skip the question. It is the position most people arrive in,
+     and it is the one with the most room to move. */
+  .stance-label {
+    font-family: var(--data);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: -6px;
+  }
+  .stance-row { display: flex; gap: 8px; }
+  button.stance { flex: 1; padding: 9px 6px; font-size: 12.5px; }
+  button.stance.pro[aria-pressed="true"],
+  button.stance.pro[aria-pressed="true"]:hover {
+    background: var(--pro); border-color: var(--pro); color: var(--ink);
+    box-shadow: var(--paste) rgba(61, 125, 255, .35); transform: none;
+  }
+  button.stance.con[aria-pressed="true"],
+  button.stance.con[aria-pressed="true"]:hover {
+    background: var(--con); border-color: var(--con); color: var(--ink);
+    box-shadow: var(--paste) rgba(255, 45, 63, .35); transform: none;
+  }
+  button.stance.und[aria-pressed="true"],
+  button.stance.und[aria-pressed="true"]:hover {
+    background: var(--paper); border-color: var(--paper); color: var(--ink);
+    box-shadow: var(--paste) var(--rule-hot); transform: none;
+  }
 
   #toast {
     position: fixed;
@@ -756,6 +928,11 @@
     .verdict { flex-wrap: wrap; padding: 10px 16px; }
     .gaugewrap { order: -1; flex: 1 0 100%; }
     .verdict button.lean { flex: 1; }
+    .result { gap: 14px; padding: 14px 16px; }
+    .result .swing .n { font-size: 40px; }
+    .result .acts { flex: 1 0 100%; }
+    .result .acts a.primary, .result .acts button { flex: 1; text-align: center; }
+    .settled-card .n { width: 44px; font-size: 22px; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -783,6 +960,8 @@
     </div>
     <div class="section-label">On the floor now</div>
       <div id="roomList"></div>
+    <div class="section-label" id="settledLabel" hidden>Settled</div>
+      <div id="resultList"></div>
   </div>
 </div>
 
@@ -825,9 +1004,24 @@
 
     <!-- Two fixed composers, toggled by role. Rebuilding this markup on every
          room:state would wipe whatever the debater was mid-way through typing. -->
+    <!-- The record, once the debate is settled. Replaces both composers. -->
+    <div class="result" id="resultCard" hidden>
+      <div class="swing" id="resultSwing"><span class="n">0</span><span class="k">Net swing</span></div>
+      <div class="said">
+        <div class="line" id="resultLine"></div>
+        <div class="detail" id="resultDetail"></div>
+      </div>
+      <div class="acts">
+        <a class="primary" id="resultOpen" href="#">See the record</a>
+        <button id="resultCopy">Copy link</button>
+      </div>
+    </div>
+
     <div class="composer" id="debateComposer">
       <input id="debateInput" maxlength="1000" placeholder="Make your case…" autocomplete="off">
       <button class="primary" id="debateSend">Send</button>
+      <!-- Two-step: an accidental click here would end the debate for everyone. -->
+      <button id="callIt">Call it</button>
     </div>
     <div class="composer" id="debateHint" hidden>
       <div class="hint">Grab a seat if you want in. Otherwise heckle from the sidebar.</div>
@@ -850,9 +1044,18 @@
 <!-- --------------------------------------------------------- name modal -->
 <div id="modal">
   <div class="modal-box">
-    <h3>Who are you?</h3>
-    <div class="note">Everyone in the room sees this. Choose well.</div>
+    <h3>Before you go in</h3>
+    <div class="note">
+      Your name is public. We record where you stand now, before you read
+      anything. It is the only way to tell later who changed your mind.
+    </div>
     <input id="nameInput" maxlength="24" placeholder="Your display name" autocomplete="off">
+    <div class="stance-label">Where do you stand right now?</div>
+    <div class="stance-row" role="group" aria-label="Your opening stance">
+      <button class="stance pro" id="stancePro" aria-pressed="false">Pro</button>
+      <button class="stance und" id="stanceUnd" aria-pressed="true">Undecided</button>
+      <button class="stance con" id="stanceCon" aria-pressed="false">Con</button>
+    </div>
     <button class="primary" id="modalJoin">Get in</button>
   </div>
 </div>
@@ -899,7 +1102,7 @@
       };
 
       ws.onclose = function () {
-        // Any in-flight request will never be answered — fail them, don't leak.
+        // Any in-flight request will never be answered, so fail them, don't leak.
         pending.forEach(function (cb) { cb({ error: 'Connection dropped.' }); });
         pending.clear();
         fire('_disconnect');
@@ -931,12 +1134,30 @@
   var myRole = null;        // 'pro' | 'con' | 'audience' | null
   var currentRoom = null;   // room summary, or null when in the lobby
   var myLean = null;        // 'pro' | 'con' | null, and null is a one-way door
-  var lean = { pro: 0, con: 0 };
-  var pendingRoomId = null; // room the name modal is gating
+  var myEntry = null;       // where the server says I stood on the way in
+  var myStance = 'undecided'; // what the modal is currently offering
+  var lean = { pro: 0, con: 0, undecided: 0 };
+  var pendingRoomId = null; // room the modal is gating
+  var concluded = false;
 
-  // localStorage throws in some sandboxed embeds — never let that kill the app.
+  // localStorage throws in some sandboxed embeds. Never let that kill the app.
   function safeGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function safeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+  // Ties this browser to its ballot across reconnects, so being dropped mid-
+  // debate cannot file a second opening stance recorded AFTER persuasion. It is
+  // not an identity: it is trivially forgeable and buys continuity, not
+  // integrity. If storage is blocked, the server falls back to per-connection.
+  var voterId = (function () {
+    var id = safeGet('debateVoter');
+    if (!id) {
+      id = (window.crypto && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : 'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+      safeSet('debateVoter', id);
+    }
+    return id;
+  })();
 
   // Every piece of user text goes through this before it reaches innerHTML.
   function esc(s) {
@@ -1007,6 +1228,35 @@
     });
   }
 
+  // Settled debates. These are ordinary links to server-rendered pages, not
+  // rooms. The whole point of concluding is that the result outlives the room.
+  socket.on('lobby:results', function (list) { renderResults(list || []); });
+
+  function renderResults(list) {
+    $('settledLabel').hidden = !list.length;
+    var el = $('resultList');
+    el.innerHTML = '';
+
+    list.forEach(function (r) {
+      var side = r.winner === 'pro' || r.winner === 'con' ? r.winner : 'draw';
+      var sign = r.swing > 0 ? '+' : '';
+      var card = document.createElement('a');
+      card.className = 'settled-card';
+      card.href = '/d/' + encodeURIComponent(r.id);
+      card.innerHTML =
+        '<div class="n ' + side + '">' + sign + (r.swing | 0) + '</div>' +
+        '<div class="info">' +
+          '<div class="t">' + esc(r.topic) + '</div>' +
+          '<div class="meta">' +
+            '<span class="pro">' + esc(r.proName) + '</span> vs ' +
+            '<span class="con">' + esc(r.conName) + '</span> · ' +
+            r.panel + ' judging' +
+          '</div>' +
+        '</div>';
+      el.appendChild(card);
+    });
+  }
+
   $('createBtn').onclick = function () {
     var topic = $('topicInput').value.trim();
     if (!topic) return toast('Give it a topic first.');
@@ -1022,13 +1272,27 @@
 
   // ----------------------------------------------------------- name modal --
 
+  // The modal now gates on the stance, not the name, so it opens on every join
+  // even for a returning visitor: the opening reading is per-debate, and it is
+  // only worth anything if it is taken before this particular argument is read.
   function askNameThenJoin(roomId) {
     pendingRoomId = roomId;
-    if (myName) return joinRoom(roomId);
+    setStance('undecided');
     $('modal').classList.add('active');
-    $('nameInput').value = '';
+    $('nameInput').value = myName;
     $('nameInput').focus();
   }
+
+  function setStance(s) {
+    myStance = s;
+    [['stancePro', 'pro'], ['stanceUnd', 'undecided'], ['stanceCon', 'con']]
+      .forEach(function (pair) {
+        $(pair[0]).setAttribute('aria-pressed', myStance === pair[1] ? 'true' : 'false');
+      });
+  }
+  $('stancePro').onclick = function () { setStance('pro'); };
+  $('stanceUnd').onclick = function () { setStance('undecided'); };
+  $('stanceCon').onclick = function () { setStance('con'); };
 
   $('modalJoin').onclick = function () {
     var name = $('nameInput').value.trim();
@@ -1036,7 +1300,7 @@
     myName = name;
     safeSet('debateName', name);
     $('modal').classList.remove('active');
-    if (pendingRoomId) joinRoom(pendingRoomId);
+    if (pendingRoomId) joinRoom(pendingRoomId, myStance);
   };
   $('nameInput').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') $('modalJoin').click();
@@ -1044,17 +1308,31 @@
 
   // ----------------------------------------------------------------- room --
 
-  function joinRoom(roomId) {
-    socket.emit('room:join', { roomId: roomId, name: myName }, function (res) {
+  function joinRoom(roomId, stance) {
+    socket.emit('room:join', {
+      roomId: roomId, name: myName, stance: stance || 'undecided', voterId: voterId
+    }, function (res) {
       if (res.error) {
         showLobby();
+        // A settled debate is not a room you can enter; it is a page you read.
+        if (res.resultUrl) { location.href = res.resultUrl; return; }
         return toast(res.error);
       }
       currentRoom = res.room;
       myRole = res.role;
       myLean = res.myLean || null;
-      lean = res.lean || { pro: 0, con: 0 };
+      myEntry = res.myEntry || null;
+      lean = res.lean || { pro: 0, con: 0, undecided: 0 };
+      concluded = res.room.status === 'concluded';
       pendingRoomId = null;
+
+      // The first ballot filed under this browser id is permanent, so a
+      // re-entry can silently disagree with the modal. Say so rather than
+      // showing a stance that quietly did not take.
+      if (stance && myEntry !== (stance === 'undecided' ? null : stance)) {
+        toast('You already went on record here as ' +
+          (myEntry ? myEntry.toUpperCase() : 'UNDECIDED') + '.');
+      }
 
       $('lobby').hidden = true;
       $('room').classList.add('active');
@@ -1077,8 +1355,12 @@
     currentRoom = null;
     myRole = null;
     myLean = null;
-    lean = { pro: 0, con: 0 };
+    myEntry = null;
+    lean = { pro: 0, con: 0, undecided: 0 };
     pendingRoomId = null;
+    concluded = false;
+    disarmCallIt();
+    $('resultCard').hidden = true;
     $('room').classList.remove('active');
     $('lobby').hidden = false;
     $('leaveBtn').hidden = true;
@@ -1098,7 +1380,7 @@
   });
 
   // Single source of truth for every role-dependent control. Called both on
-  // room:state pushes and — crucially — right after a seat ack updates myRole,
+  // room:state pushes and, crucially, right after a seat ack updates myRole,
   // because the broadcast can land before the ack does.
   function renderRoom() {
     var r = currentRoom;
@@ -1115,20 +1397,33 @@
       var other = side === 'pro' ? 'con' : 'pro';
       if (myRole === side) {
         btn.textContent = 'Step down';
-        btn.disabled = false;
+        btn.disabled = concluded;
       } else {
         btn.textContent = 'Take side';
-        btn.disabled = r[side + 'Taken'] || myRole === other;
+        btn.disabled = concluded || r[side + 'Taken'] || myRole === other;
       }
     });
 
     var seated = myRole === 'pro' || myRole === 'con';
-    $('debateComposer').hidden = !seated;
-    $('debateHint').hidden = seated;
+
+    // Once it is settled the record is the only control on the stage. Leaving a
+    // live composer up would offer an action the server now refuses.
+    $('resultCard').hidden = !concluded;
+    $('debateComposer').hidden = concluded || !seated;
+    $('debateHint').hidden = concluded || seated;
+    $('callIt').hidden = !seated;
+    if (concluded) $('typing').textContent = '';
+
+    // The sidebar closes with the stage. A settled debate is a fixed record,
+    // and letting the floor keep talking would leave the permalink out of date
+    // the moment it was written.
+    $('audInput').disabled = concluded;
+    $('audSend').disabled = concluded;
+    $('audInput').placeholder = concluded ? 'The debate is settled.' : 'Run your mouth…';
 
     // A debater picking a favourite would be marking their own paper.
-    $('leanPro').hidden = seated;
-    $('leanCon').hidden = seated;
+    $('leanPro').hidden = seated || concluded;
+    $('leanCon').hidden = seated || concluded;
     renderLean();
   }
 
@@ -1152,16 +1447,23 @@
     $('gaugePro').style.width = proPct + '%';
     $('gaugeCon').style.width = (100 - proPct) + '%';
 
+    // How many are still on the fence is the useful half of this readout: it is
+    // the persuadable pool, and the verdict is drawn from movement, not volume.
+    var und = lean.undecided | 0;
+    var still = und ? ' · <b>' + und + '</b> undecided' : '';
+
     var read = $('gaugeRead');
     if (!total) {
-      read.textContent = 'Nobody has called it yet';
+      read.innerHTML = und
+        ? '<b>' + und + '</b> watching, nobody has called it'
+        : 'Nobody has called it yet';
     } else if (pro === con) {
-      read.innerHTML = 'Dead even · <b>' + pro + '</b> a side';
+      read.innerHTML = 'Dead even · <b>' + pro + '</b> a side' + still;
     } else {
       var up = pro > con ? 'pro' : 'con';
       read.innerHTML =
         '<b>' + pro + '</b> pro · <b>' + con + '</b> con · ' +
-        '<span class="' + up + '">' + up + ' up ' + Math.abs(pro - con) + '</span>';
+        '<span class="' + up + '">' + up + ' up ' + Math.abs(pro - con) + '</span>' + still;
     }
 
     ['pro', 'con'].forEach(function (side) {
@@ -1206,6 +1508,68 @@
   }
   $('proBtn').onclick = function () { toggleSeat('pro'); };
   $('conBtn').onclick = function () { toggleSeat('con'); };
+
+  // ---------------------------------------------------------- calling it --
+  // Irreversible and it ends the debate for everyone in the room, so the first
+  // click only arms the button. It disarms itself rather than staying hot.
+
+  var armTimer = null;
+  function disarmCallIt() {
+    clearTimeout(armTimer);
+    armTimer = null;
+    $('callIt').classList.remove('armed');
+    $('callIt').textContent = 'Call it';
+  }
+
+  $('callIt').onclick = function () {
+    if (!armTimer) {
+      $('callIt').classList.add('armed');
+      $('callIt').textContent = 'Sure? End it';
+      armTimer = setTimeout(disarmCallIt, 4000);
+      return;
+    }
+    disarmCallIt();
+    socket.emit('debate:conclude', function (res) {
+      if (res.error) return toast(res.error);
+      // The room:concluded push does the rendering; the ack only reports.
+    });
+  };
+
+  socket.on('room:concluded', function (d) {
+    if (!currentRoom || !d || !d.result) return;
+    concluded = true;
+    disarmCallIt();
+    showResult(d.result, d.url);
+    renderRoom();
+  });
+
+  function showResult(result, url) {
+    var v = result.verdict;
+    var side = v.winner === 'pro' || v.winner === 'con' ? v.winner : 'draw';
+    var swing = $('resultSwing');
+    swing.className = 'swing ' + side;
+    swing.querySelector('.n').textContent = (v.swing > 0 ? '+' : '') + v.swing;
+
+    // The headline is written once, on the server, and carried in the record,
+    // so this card and the permalink can never word the same result differently.
+    $('resultLine').textContent = result.headline;
+    $('resultDetail').textContent =
+      v.panel + ' judging · ' + v.moved.toPro + ' to pro · ' + v.moved.toCon +
+      ' to con · ' + v.moved.crossed + ' crossed';
+
+    var href = url || ('/d/' + result.id);
+    $('resultOpen').href = href;
+    $('resultCopy').onclick = function () {
+      var full = location.origin + href;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(full)
+          .then(function () { toast('Link copied.'); })
+          .catch(function () { toast(full); });
+      } else {
+        toast(full);
+      }
+    };
+  }
 
   // ---------------------------------------------------------------- stage --
 
@@ -1298,7 +1662,7 @@
     if (wasDisconnected && currentRoom) {
       var roomId = currentRoom.id;
       // The server has no memory of us; rejoin from scratch as audience.
-      // Seats are deliberately not auto-reclaimed — they may be someone else's now.
+      // Seats are deliberately not auto-reclaimed. They may be someone else's now.
       currentRoom = null;
       myRole = null;
       joinRoom(roomId);

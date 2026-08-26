@@ -1,6 +1,6 @@
 'use strict';
 //
-// MasterDebater Live — a real-time debate platform: two seated debaters on a
+// MasterDebater Live: a real-time debate platform with two seated debaters on a
 // central stage, an unlimited audience chatting alongside them.
 //
 // Zero dependencies. Built-in `http` for static files, a hand-rolled RFC 6455
@@ -21,6 +21,14 @@ const http = require('http');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+
+// Three stdlib-only modules, still zero dependencies. They are split out
+// because a concluded debate outlives the process and the live room does not:
+// everything below section 2 is about the live room, and these three are about
+// the record it leaves behind.
+const { computeVerdict, verdictLine } = require('./verdict');
+const archive = require('./archive');
+const resultpage = require('./resultpage');
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -170,7 +178,7 @@ class WSConnection {
     if (!this.open) return;
     if (this.socket.writableLength > MAX_BACKLOG) {
       // Slow consumer: drop it instead of buffering unboundedly. Don't go
-      // through close() — that would try to write yet another frame.
+      // through close(), which would try to write yet another frame.
       this._teardown();
       this.socket.destroy();
       return;
@@ -256,7 +264,7 @@ function acceptUpgrade(req, socket) {
 }
 
 // ===========================================================================
-// 2. Store — the only place room state lives
+// 2. Store: the only place room state lives
 // ===========================================================================
 
 const MAX_TOPIC_LEN = 140;
@@ -264,6 +272,8 @@ const MAX_NAME_LEN = 24;
 const MAX_MSG_LEN = 1000;
 const MAX_HISTORY = 200;
 const MAX_ROOMS = 200; // hard cap so room:create spam can't exhaust memory
+const MAX_VOTER_ID_LEN = 40;
+const MAX_BALLOTS = 5000; // per room; a ballot is tiny, but nothing is unbounded
 const EMPTY_ROOM_TTL = 5 * 60 * 1000;
 
 const store = (() => {
@@ -280,10 +290,16 @@ const store = (() => {
         id,
         topic,
         createdAt: Date.now(),
+        status: 'live', // 'live' | 'concluded'
+        result: null,
         seats: { pro: null, con: null },
         debateMessages: [],
         audienceMessages: [],
         members: new Set(),
+        // voterId -> { entry, current, seated }. Keyed by a browser-held id
+        // rather than by connection, so a reconnect resumes the same ballot
+        // instead of filing a second one with a post-persuasion "entry".
+        ballots: new Map(),
         reapTimer: null,
       };
       rooms.set(id, room);
@@ -312,6 +328,27 @@ const store = (() => {
       list.push(msg);
       while (list.length > MAX_HISTORY) list.shift();
       return msg;
+    },
+
+    // The first ballot filed under a voterId wins, permanently. Re-joining
+    // cannot reset an entry stance. That would let anyone who was persuaded
+    // erase the evidence by leaving and coming back.
+    openBallot(room, voterId, entry) {
+      const existing = room.ballots.get(voterId);
+      if (existing) return existing;
+      if (room.ballots.size >= MAX_BALLOTS) return null;
+      const ballot = { entry, current: entry, seated: false };
+      room.ballots.set(voterId, ballot);
+      return ballot;
+    },
+
+    getBallot(room, voterId) { return room.ballots.get(voterId) || null; },
+    listBallots(room) { return [...room.ballots.values()]; },
+
+    conclude(room, result) {
+      room.status = 'concluded';
+      room.result = result;
+      return room;
     },
 
     // Rooms linger for a grace period so a reconnecting host doesn't lose them.
@@ -346,6 +383,7 @@ function roomSummary(room) {
     id: room.id,
     topic: room.topic,
     createdAt: room.createdAt,
+    status: room.status,
     proTaken: !!room.seats.pro,
     conTaken: !!room.seats.con,
     proName: room.seats.pro ? room.seats.pro.name : null,
@@ -354,18 +392,25 @@ function roomSummary(room) {
   };
 }
 
+// The live gauge counts who is in the room RIGHT NOW, which is not the same
+// population the verdict is drawn from. That one is every ballot ever filed,
+// present or not (see `finalVerdict`). Two different questions: "where is the
+// room leaning" and "who moved it".
+//
 // Only the audience is counted. A seated debater voting for their own side
 // would be marking their own paper, so seats are skipped; their pick is kept
 // so it comes back if they step down.
 function leanTally(room) {
   let pro = 0;
   let con = 0;
+  let undecided = 0;
   for (const c of room.members) {
     if (c.role !== 'audience') continue;
     if (c.lean === 'pro') pro++;
     else if (c.lean === 'con') con++;
+    else undecided++;
   }
-  return { pro, con };
+  return { pro, con, undecided };
 }
 
 // --- broadcast helpers -----------------------------------------------------
@@ -382,8 +427,15 @@ function broadcastRoom(room, type, data, except) {
 function broadcastLobby() {
   const frame = JSON.stringify({
     type: 'lobby:rooms',
-    data: store.listRooms().map(roomSummary),
+    // A concluded room is a record, not an invitation: it drops off the floor
+    // and reappears under "settled" with a permalink.
+    data: store.listRooms().filter((r) => r.status === 'live').map(roomSummary),
   });
+  for (const c of clients) c.ws.send(frame);
+}
+
+function broadcastResults() {
+  const frame = JSON.stringify({ type: 'lobby:results', data: archive.list() });
   for (const c of clients) c.ws.send(frame);
 }
 
@@ -406,7 +458,11 @@ function leaveRoom(client) {
   if (!room) return;
 
   store.removeMember(room, client);
-  const wasSeated = client.role === 'pro' || client.role === 'con';
+  // A settled debate keeps its seats: the record names who argued, and the
+  // room's own header should not start contradicting the permalink the moment
+  // the winner closes their tab.
+  const wasSeated =
+    room.status !== 'concluded' && (client.role === 'pro' || client.role === 'con');
 
   if (wasSeated) {
     store.freeSeat(room, client.role);
@@ -437,24 +493,38 @@ const handlers = {
     }
 
     const room = store.createRoom(topic);
-    // The creator hasn't joined yet — without this, a room that never gets a
+    // The creator hasn't joined yet. Without this, a room that never gets a
     // member has no reap path and leaks forever. Joining cancels the timer.
     store.scheduleReap(room, broadcastLobby);
     broadcastLobby();
     return { roomId: room.id };
   },
 
-  // Everyone arrives as audience — seats are always claimed explicitly.
-  'room:join'(client, { roomId, name } = {}) {
+  // Everyone arrives as audience. Seats are always claimed explicitly.
+  //
+  // `stance` is the whole point of the join step now: it is recorded BEFORE the
+  // history is replayed, so it is a reading of where this person stood before
+  // they were exposed to the argument. Asking afterwards would measure nothing.
+  'room:join'(client, { roomId, name, stance, voterId } = {}) {
     const room = store.getRoom(roomId);
     if (!room) return { error: 'That one is over.' };
+    if (room.status === 'concluded') {
+      return { error: 'That debate is settled.', resultUrl: `/d/${room.id}` };
+    }
 
     if (client.room) leaveRoom(client);
 
     client.name = clean(name, MAX_NAME_LEN) || 'Guest';
     client.role = 'audience';
     client.room = room;
-    client.lean = null;
+
+    // A client-supplied id is spoofable, and deliberately so: there are no
+    // accounts here, so this buys ballot CONTINUITY across reconnects, not
+    // ballot integrity. Stuffing is possible and out of scope. See the README.
+    client.voterId = clean(voterId, MAX_VOTER_ID_LEN) || `anon-${client.id}`;
+    const entry = stance === 'pro' || stance === 'con' ? stance : null;
+    const ballot = store.openBallot(room, client.voterId, entry);
+    client.lean = ballot ? ballot.current : null;
     store.addMember(room, client);
 
     broadcastRoom(room, 'audience:system',
@@ -469,7 +539,10 @@ const handlers = {
       debateMessages: room.debateMessages,
       audienceMessages: room.audienceMessages,
       lean: leanTally(room),
-      myLean: null,
+      myLean: client.lean,
+      // Echoed back so a returning voter sees their original stance, not the
+      // one they just picked in a modal the server ignored.
+      myEntry: ballot ? ballot.entry : null,
     };
   },
 
@@ -482,12 +555,18 @@ const handlers = {
   'seat:claim'(client, { side } = {}) {
     const room = client.room;
     if (!room) return { error: 'Join a debate first.' };
+    if (room.status === 'concluded') return { error: 'This debate is settled.' };
     if (side !== 'pro' && side !== 'con') return { error: 'Pick PRO or CON.' };
     if (client.role !== 'audience') return { error: 'You are already seated.' };
     if (room.seats[side]) return { error: 'Someone beat you to it.' };
 
     store.takeSeat(room, side, client);
     client.role = side;
+
+    // Struck from the panel for good, even if they step down later. You argued;
+    // you do not also get to be evidence that the argument worked.
+    const ballot = store.getBallot(room, client.voterId);
+    if (ballot) ballot.seated = true;
 
     broadcastRoom(room, 'debate:system', {
       text: `${client.name} takes the ${side.toUpperCase()} side`,
@@ -500,6 +579,7 @@ const handlers = {
   'seat:release'(client) {
     const room = client.room;
     if (!room) return { error: 'Join a debate first.' };
+    if (room.status === 'concluded') return { error: 'This debate is settled.' };
     if (client.role !== 'pro' && client.role !== 'con') return { error: 'You are not seated.' };
 
     const side = client.role;
@@ -519,6 +599,7 @@ const handlers = {
   'debate:message'(client, { text } = {}) {
     const room = client.room;
     if (!room) return { error: 'Join a debate first.' };
+    if (room.status === 'concluded') return { error: 'This debate is settled.' };
     if (client.role !== 'pro' && client.role !== 'con') {
       return { error: 'Take a seat if you want to argue.' };
     }
@@ -535,6 +616,7 @@ const handlers = {
   'audience:message'(client, { text } = {}) {
     const room = client.room;
     if (!room) return { error: 'Join a debate first.' };
+    if (room.status === 'concluded') return { error: 'This debate is settled.' };
     text = clean(text, MAX_MSG_LEN);
     if (!text) return { error: 'Say something first.' };
 
@@ -549,11 +631,18 @@ const handlers = {
   'audience:lean'(client, { side } = {}) {
     const room = client.room;
     if (!room) return { error: 'Join a debate first.' };
+    if (room.status === 'concluded') return { error: 'This debate is settled.' };
     if (side !== 'pro' && side !== 'con') return { error: 'Pick PRO or CON.' };
     if (client.lean === side) return { ok: true, lean: side };
 
     const flipped = client.lean !== null;
     client.lean = side;
+
+    // The ballot is the durable copy: `client.lean` dies with the connection,
+    // and a verdict that forgot everyone who closed a tab would be measuring
+    // stamina rather than persuasion.
+    const ballot = store.getBallot(room, client.voterId);
+    if (ballot) ballot.current = side;
 
     // Only a flip gets announced. First picks would be a wall of noise at the
     // top of every debate, whereas someone changing their mind is the point.
@@ -567,9 +656,68 @@ const handlers = {
     return { ok: true, lean: side };
   },
 
+  // Either debater can call it. Requiring both to agree would hand the loser a
+  // veto, and a debate nobody can end is the state this app was already in.
+  'debate:conclude'(client) {
+    const room = client.room;
+    if (!room) return { error: 'Join a debate first.' };
+    if (client.role !== 'pro' && client.role !== 'con') {
+      return { error: 'Only the two debaters can call it.' };
+    }
+    if (room.status === 'concluded') return { error: 'Already settled.' };
+    if (!room.seats.pro || !room.seats.con) {
+      return { error: 'Both seats have to be filled before this counts.' };
+    }
+    // A verdict drawn from a one-sided transcript is not a verdict. Without
+    // this a debater could open, post once, and bank a "win" against silence.
+    const spoke = new Set(room.debateMessages.map((m) => m.role));
+    if (!spoke.has('pro') || !spoke.has('con')) {
+      return { error: 'Both sides need to make a case first.' };
+    }
+
+    const verdict = computeVerdict(store.listBallots(room));
+    const record = {
+      version: 1,
+      id: room.id,
+      topic: room.topic,
+      createdAt: room.createdAt,
+      concludedAt: Date.now(),
+      concludedBy: client.role,
+      pro: { name: room.seats.pro.name },
+      con: { name: room.seats.con.name },
+      verdict,
+      // Written into the record rather than derived twice. The live result card
+      // and the permalink must never describe the same debate differently, and
+      // the surest way to guarantee that is for there to be one sentence.
+      headline: verdictLine(verdict, room.seats.pro.name, room.seats.con.name),
+      debateMessages: room.debateMessages,
+      audienceMessages: room.audienceMessages,
+    };
+
+    // Archive first: if the write fails, the room stays live and callable
+    // rather than ending in a state whose permalink 404s.
+    try {
+      archive.save(record);
+    } catch (err) {
+      console.error('archive failed:', err);
+      return { error: 'Could not save the record. Nothing was lost. Try again.' };
+    }
+
+    store.conclude(room, record);
+    broadcastRoom(room, 'debate:system', {
+      text: `${client.name} called it. The debate is settled.`,
+      ts: record.concludedAt,
+    });
+    broadcastRoom(room, 'room:concluded', { result: record, url: `/d/${room.id}` });
+    publishRoom(room);
+    broadcastResults();
+    return { ok: true, result: record, url: `/d/${room.id}` };
+  },
+
   'debate:typing'(client, { isTyping } = {}) {
     const room = client.room;
-    if (!room || (client.role !== 'pro' && client.role !== 'con')) return { ok: true };
+    if (!room || room.status === 'concluded') return { ok: true };
+    if (client.role !== 'pro' && client.role !== 'con') return { ok: true };
     broadcastRoom(room, 'debate:typing',
       { name: client.name, role: client.role, isTyping: !!isTyping }, client);
     return { ok: true };
@@ -591,6 +739,31 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+// Shared by both HTML routes. `scriptSrc` is the only thing that differs: the
+// live page has one inline block and needs 'unsafe-inline'; a result page is a
+// static document, so it gets the stricter 'none'.
+const securityHeaders = (scriptSrc) => ({
+  'Cache-Control': 'no-cache',
+  'Content-Security-Policy':
+    `default-src 'none'; script-src ${scriptSrc}; style-src 'unsafe-inline'; ` +
+    "img-src 'self' data:; connect-src 'self' ws: wss:; " +
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+});
+
+// Only used to build the absolute permalink printed on the page. Host is
+// attacker-controlled, so it is validated to a hostname[:port] shape rather
+// than interpolated raw. A Host header is not a trusted string.
+const HOST_RE = /^[a-zA-Z0-9.\-]+(:\d{1,5})?$/;
+function originOf(req) {
+  const host = req.headers.host || '';
+  if (!HOST_RE.test(host)) return '';
+  const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+  return `${proto}://${host}`;
+}
+
 const server = http.createServer((req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { Allow: 'GET, HEAD' });
@@ -605,9 +778,31 @@ const server = http.createServer((req, res) => {
     return res.end('Bad request');
   }
   if (urlPath.includes('\0')) { res.writeHead(400); return res.end('Bad request'); }
+
+  // --- the permalink -------------------------------------------------------
+  // Never touches the static path at all. The id is matched against the exact
+  // 6-hex-char room-id shape before it reaches the filesystem, so `..` and
+  // friends are rejected as "no such debate" rather than defended against.
+  if (urlPath.startsWith('/d/')) {
+    const id = urlPath.slice(3);
+    const record = archive.isValidId(id) ? archive.load(id) : null;
+    if (!record) {
+      res.writeHead(404, { ...securityHeaders("'none'"), 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end('<!DOCTYPE html><meta charset="utf-8"><title>No such debate</title>' +
+        '<body style="background:#0a0b10;color:#f4f1e9;font:16px system-ui;padding:60px">' +
+        'No debate lives at that address. <a style="color:#b96bff" href="/">Start one</a>.');
+    }
+    const body = resultpage.render(record, originOf(req));
+    res.writeHead(200, {
+      ...securityHeaders("'none'"),
+      'Content-Type': 'text/html; charset=utf-8',
+    });
+    return res.end(req.method === 'HEAD' ? undefined : body);
+  }
+
   if (urlPath === '/') urlPath = '/index.html';
 
-  // Resolve, then confirm we never escaped public/ — `..`, absolute paths and
+  // Resolve, then confirm we never escaped public/. `..`, absolute paths and
   // sibling directories like `publicX` all fail this check.
   const filePath = path.resolve(PUBLIC_DIR, '.' + path.posix.normalize(urlPath));
   if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + path.sep)) {
@@ -618,17 +813,8 @@ const server = http.createServer((req, res) => {
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
     res.writeHead(200, {
+      ...securityHeaders("'unsafe-inline'"),
       'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
-      'Cache-Control': 'no-cache',
-      // The page uses one inline script/style block, so 'unsafe-inline' has to
-      // stay — the CSP still blocks external script injection and framing.
-      'Content-Security-Policy':
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
-        "img-src 'self' data:; connect-src 'self' ws: wss:; " +
-        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-      'X-Content-Type-Options': 'nosniff',
-      'X-Frame-Options': 'DENY',
-      'Referrer-Policy': 'no-referrer',
     });
     res.end(req.method === 'HEAD' ? undefined : data);
   });
@@ -656,12 +842,16 @@ server.on('upgrade', (req, socket) => {
   const ws = acceptUpgrade(req, socket);
   if (!ws) return;
 
-  const client = { id: nextClientId++, ws, name: null, role: null, room: null, lean: null };
+    const client = {
+    id: nextClientId++, ws, name: null, role: null, room: null, lean: null, voterId: null,
+  };
   client.tokens = RATE_BURST;
   client.lastRefill = Date.now();
   client.strikes = 0;
   clients.add(client);
-  sendTo(client, 'lobby:rooms', store.listRooms().map(roomSummary));
+  sendTo(client, 'lobby:rooms',
+    store.listRooms().filter((r) => r.status === 'live').map(roomSummary));
+  sendTo(client, 'lobby:results', archive.list());
 
   ws.onmessage = (raw) => {
     let msg;
@@ -731,8 +921,11 @@ const heartbeat = setInterval(() => {
 }, 30000);
 if (heartbeat.unref) heartbeat.unref();
 
+const restored = archive.boot();
+
 server.listen(PORT, () => {
   console.log(`MasterDebater Live running at http://localhost:${PORT}`);
+  console.log(`${restored} settled debate${restored === 1 ? '' : 's'} in the archive`);
 });
 
 module.exports = { server };
