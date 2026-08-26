@@ -368,6 +368,39 @@ container is replaced.
 There is no way to delete an archived debate from inside the app. Removing one
 means deleting its JSON file on the volume by hand.
 
+## The clip art, and the tools that clean it up
+
+`tools/` holds two throwaway utilities and the small PNG reader they share.
+Neither runs at build or serve time; the images in `homesite/` are already
+processed. They are kept because both problems recur every time an image is
+added.
+
+`dechecker.js` cuts a baked-in transparency checkerboard out of a PNG. Stock
+sites advertising a transparent PNG often serve the preview with the checker
+drawn into the pixels, so the file has an alpha channel and every pixel in it
+is opaque. Two of the images here arrived that way. It samples the checker
+greys from a corner and floods inward from the border, rather than replacing
+every matching pixel, which would punch holes through any near-white inside
+the subject.
+
+`resize.js` downscales to the size an image is actually drawn at. The ring
+arrived at 1280px and is rendered as a 26px icon, which cost a megabyte to draw
+something the size of a full stop. It box-filters on premultiplied alpha:
+averaging colour and alpha separately drags the colour of transparent pixels
+into the edge, which on a cut-out is a halo of whatever used to be behind the
+subject.
+
+Order matters. Cut the checker at full resolution, then downscale, so the
+checker colours are still flat when they are matched and the alpha edge gets
+anti-aliased on the way down.
+
+The page carries about 1.7 MB of clip art, down from 3.4 MB. Most of what is
+left is two files that are correctly sized for what they are: Ziggy at true 2x
+for a 480px corner, and Marx, whose GIF is 165x267 and is therefore being
+scaled up rather than down. The three icon GIFs are still several times larger
+than they are drawn, but shrinking an animated GIF means an LZW encoder and
+palette handling, which has not been worth writing yet.
+
 ## Crawlers
 
 `/robots.txt` and `/sitemap.xml` are generated, not files, so a debate is
