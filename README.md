@@ -215,6 +215,45 @@ Files are never deleted. An archive that quietly dropped old debates would break
 exactly the permalinks it exists to keep, so disk grows without limit by design.
 Only the in-memory lobby index is capped, at 200.
 
+## Deployment
+
+Live at https://masterdebater-live-production.up.railway.app
+
+Railway, deployed from `ComradeCoding/MasterDebater-Live` on `main`. Pushing to
+main builds and deploys automatically. Railway injects `PORT` (8080 in
+production) and the server already reads it, so nothing is pinned.
+
+WebSockets work through the proxy without changes. `originAllowed` compares the
+`Origin` header's host against the `Host` header, and both are the public
+domain behind a reverse proxy, so the cross-site guard holds without an
+allowlist that would need editing per environment.
+
+**The archive needs a volume or it is not an archive.** A Railway container's
+filesystem is discarded on every redeploy, so without one, every settled debate
+and every permalink dies the next time you push. A volume named
+`debate-archives` is mounted at `/data`, and `ARCHIVE_DIR=/data` points the
+archive at it.
+
+One trap worth recording, because it cost two redeploys to find. Creating the
+volume through the API only *stages* the mount. The staged config and the
+deployed config are different things, and they disagree silently: the Railway
+agent's view of the service showed `volumeMounts` while `get-service-config`
+showed none, and containers kept booting without the mount. Records written in
+that window looked fine, because a container-local `/data` is perfectly
+writable and readable, and then vanished on the next deploy. Committing the
+staged change is a separate step, and only after it does `Mounting volume on:
+…` appear in the boot log.
+
+The check that actually proves it is worth keeping: conclude a debate, confirm
+its permalink returns 200, redeploy, and confirm it still returns 200. Boot logs
+report the count at startup, so `1 settled debate in the archive` after a
+restart is the short version of the same proof. Anything less than a redeploy
+tests nothing, since the pre-mount failure mode reads as success until the
+container is replaced.
+
+There is no way to delete an archived debate from inside the app. Removing one
+means deleting its JSON file on the volume by hand.
+
 ## Design notes
 
 A few behaviours exist specifically to avoid bugs that showed up in the
