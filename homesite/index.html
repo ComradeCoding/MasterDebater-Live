@@ -162,6 +162,88 @@
     100% { transform: rotate(-12deg) scale(1); }
   }
 
+  /* ------------------------------------------------------------ clip art -- */
+  /* The nav icons, drawn in CSS and animated on steps() so they judder like
+     the 16-colour GIFs they are impersonating. Emoji were the one modern thing
+     left on the page: too flat, too smooth, and rendered in whatever font the
+     visitor's OS shipped this year. A 1999 nav bar had a spinning globe and a
+     blinking star, and those were pictures, not typography. */
+
+  .ic {
+    display: inline-block;
+    width: 15px;
+    height: 15px;
+    vertical-align: -3px;
+    margin-right: 5px;
+    position: relative;
+  }
+
+  /* Spinning globe. The land band scrolls across the sphere in eight jumps,
+     which is exactly how the original GIF faked rotation. */
+  .ic-globe {
+    border-radius: 50%;
+    background:
+      repeating-linear-gradient(90deg, #0a5c0a 0 3px, #128a12 3px 7px),
+      #1a4fd0;
+    background-size: 30px 100%, 100% 100%;
+    border: 1px solid #063;
+    box-shadow: inset -3px -2px 4px rgba(0,0,0,.5);
+    animation: globe 1.6s steps(8) infinite;
+  }
+  @keyframes globe { to { background-position: -30px 0, 0 0; } }
+
+  /* Red star, blinking between red and gold. */
+  .ic-star {
+    background: #ff2200;
+    clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%,
+                       21% 91%, 32% 57%, 2% 35%, 39% 35%);
+    animation: starblink .7s steps(2) infinite;
+  }
+  @keyframes starblink { 50% { background: #ffcc00; } }
+
+  /* The LIVE bulb, halo snapping on and off. */
+  .ic-live {
+    border-radius: 50%;
+    background: #ff2200;
+    animation: livepulse .8s steps(2) infinite;
+  }
+  @keyframes livepulse {
+    50% { background: #ff8866; box-shadow: 0 0 7px 3px rgba(255,45,0,.85); }
+  }
+
+  /* Envelope, flap flipping open and shut. */
+  .ic-mail { background: #ffcc00; border: 1px solid #663300; }
+  .ic-mail::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    height: 9px;
+    background: #fff0b3;
+    border-bottom: 1px solid #663300;
+    clip-path: polygon(0 0, 100% 0, 50% 100%);
+    animation: flap .9s steps(2) infinite;
+  }
+  @keyframes flap { 50% { clip-path: polygon(0 0, 100% 0, 50% 0); } }
+
+  /* A page being typed, the lines creeping upward. */
+  .ic-doc { background: #f4f1e9; border: 1px solid #444; }
+  .ic-doc::after {
+    content: "";
+    position: absolute;
+    inset: 2px;
+    background: repeating-linear-gradient(180deg, #333 0 1px, transparent 1px 4px);
+    animation: typing 1.1s steps(4) infinite;
+  }
+  @keyframes typing { to { background-position: 0 8px; } }
+
+  /* Spinning ring. The odd-coloured segment is what makes the spin legible. */
+  .ic-ring {
+    border-radius: 50%;
+    border: 3px solid #ffcc00;
+    border-top-color: #cc0000;
+    animation: spin 1.2s steps(8) infinite;
+  }
+
   .feature {
     border: 3px double #ffcc00;
     background: #440000;
@@ -325,12 +407,12 @@
       <td class="nav">
         <h3>POLITBURO<br>NAVIGATION</h3>
         <ul>
-          <li>&#9773; <a href="/home">Home Soviet</a></li>
-          <li>&#9876; <a href="/arena">MasterDebater&nbsp;Live</a> <span class="starburst">NEW!!</span></li>
-          <li>&#128220; <a href="#manifesto">The Manifesto</a></li>
-          <li>&#128197; <a href="#plan">Five Year Plan</a></li>
-          <li>&#128221; <a href="#guestbook">Guestbook</a></li>
-          <li>&#128279; <a href="#webring">Webring</a></li>
+          <li><span class="ic ic-globe" aria-hidden="true"></span><a href="/home">Home Soviet</a></li>
+          <li><span class="ic ic-live" aria-hidden="true"></span><a href="/arena">MasterDebater&nbsp;Live</a> <span class="starburst">NEW!!</span></li>
+          <li><span class="ic ic-doc" aria-hidden="true"></span><a href="#manifesto">The Manifesto</a></li>
+          <li><span class="ic ic-star" aria-hidden="true"></span><a href="#plan">Five Year Plan</a></li>
+          <li><span class="ic ic-mail" aria-hidden="true"></span><a href="#guestbook">Guestbook</a></li>
+          <li><span class="ic ic-ring" aria-hidden="true"></span><a href="#webring">Webring</a></li>
         </ul>
         <hr class="divider">
         <div style="font-size:11px;">
@@ -350,7 +432,7 @@
 
         <div class="feature">
           <span class="starburst">NEW!!</span>
-          <h3 style="margin-top:8px;">&#9876; MASTERDEBATER LIVE &#9876;</h3>
+          <h3 style="margin-top:8px;"><span class="ic ic-live" aria-hidden="true"></span>MASTERDEBATER LIVE<span class="ic ic-live" aria-hidden="true"></span></h3>
           <p style="margin:6px 0;">The state-approved argument arena. Two comrades
           enter the stage, the audience records where it stands before reading a
           word, and when the clock runs out the side that <b>moved the room</b>
@@ -361,7 +443,7 @@
           <div style="font-size:11px; margin-top:6px;">(quartered at comradecoding.com/arena, as all state property should be)</div>
         </div>
 
-        <h3 id="manifesto">&#128220; THE MANIFESTO</h3>
+        <h3 id="manifesto"><span class="ic ic-doc" aria-hidden="true"></span>THE MANIFESTO</h3>
         <p style="text-align:left;"><b>A spectre is haunting the United States
         of America: the spectre of Communism.</b> All the powers of the old
         order have entered into a holy alliance to exorcise it: the senator and
@@ -392,7 +474,7 @@
         <p style="text-align:left;"><b>Workers of the world, unite.</b> You have
         nothing to lose but your chains, your rent, and your subscription fees.</p>
 
-        <h3 id="plan">&#128197; THE FIVE YEAR PLAN</h3>
+        <h3 id="plan"><span class="ic ic-star" aria-hidden="true"></span>THE FIVE YEAR PLAN</h3>
         <ul class="plan">
           <li>&#9745; <b>Year one:</b> seize the domain. The means of publication, however modest, belong in the hands of the worker who uses them.</li>
           <li>&#9745; <b>Year two:</b> build it by hand and in the open. No trackers, no ad tech, nothing sold behind the reader's back.</li>
@@ -420,7 +502,7 @@
   </div>
 
   <div id="webring" class="webring">
-    &#128279; <b>The Marxist-Leninist Webring</b> &#128279;<br>
+    <span class="ic ic-ring" aria-hidden="true"></span><b>The Marxist-Leninist Webring</b><span class="ic ic-ring" aria-hidden="true"></span><br>
     [ <a href="/home">&#9756; PREV</a> |
     <a href="/home">RANDOM</a> |
     <a href="/home">NEXT &#9758;</a> ]<br>
@@ -428,7 +510,7 @@
   </div>
 
   <div id="guestbook" style="margin:10px 0;">
-    <b>&#128221; GUESTBOOK:</b> temporarily collectivized.
+    <b><span class="ic ic-mail" aria-hidden="true"></span>GUESTBOOK:</b> temporarily collectivized.
     <span class="blink">Sign it by joining a debate.</span>
   </div>
 
