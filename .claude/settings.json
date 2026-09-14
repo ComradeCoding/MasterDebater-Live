@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Workflow",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'if [ \"$CLAUDE_ALLOW_WORKFLOWS\" = \"1\" ]; then exit 0; fi; echo \"Blocked by .claude/settings.json: multi-agent workflows cost this owner 164 million cache-read tokens in one session. Workflows are switched on by setting CLAUDE_ALLOW_WORKFLOWS=1 in the environment (claude.ai environment variables, or the shell); until then work solo, or use a single Agent call. When they are on, build them to the Token budget rules in CLAUDE.md or AGENTS.md: six agents, one pass, ten tool calls each, paths not contents, haiku or sonnet for the mechanical work.\" >&2; exit 2'"
+          }
+        ]
+      }
+    ]
+  }
+}
