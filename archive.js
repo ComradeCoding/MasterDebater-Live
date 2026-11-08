@@ -7,10 +7,11 @@
 // It is a record, it gets a permanent URL, and it is the only thing anyone can
 // share, so it has to outlive the process that produced it.
 //
-// One JSON file per debate under `data/`. No database, because there is no npm
-// here and because the access pattern is write-once/read-by-id, which is the
-// shape a filesystem already is. Section 2 of server.js is still the swap point if that
-// ever stops being true.
+// One JSON file per debate under `data/`. No database, because the access
+// pattern is write-once/read-by-id, which is the shape a filesystem already
+// is, and because a folder of JSON is a record anyone can read without the
+// app. Section 2 of server.js is still the swap point if that ever stops
+// being true.
 
 const fs = require('fs');
 const path = require('path');

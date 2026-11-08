@@ -13,23 +13,26 @@ one is the result, and it gets a permanent page.
 node server.js      →  http://localhost:3000
 ```
 
-Node 18+ runs the server. Node 22+ is needed for `test-clients.js`, which uses
-the built-in global `WebSocket` client.
-
-> On this machine `node` is not on `PATH`. The only Node 22 binary present ships
-> with Photoshop, so the commands below work as-is:
->
-> ```bash
-> "C:\Program Files\Adobe\Adobe Photoshop 2026\node.exe" server.js
-> ```
+Node 22 or later, for the built-in global `WebSocket` the tests drive the
+server with. Development and production both run Node 24.
 
 ## Zero dependencies
 
-There is no `npm install` and no build step. The server is built-in `http` plus
-a hand-rolled RFC 6455 WebSocket implementation; the client is one static HTML
-file. Socket.IO would have been the default choice, but npm is unavailable in
-this environment, so the spec's sanctioned zero-dependency fallback is what is
-implemented here.
+There is no `npm install` and no build step, and that is a choice rather than a
+workaround. The server is built-in `http` plus a hand-rolled RFC 6455 WebSocket
+implementation; the client is one static HTML file. Socket.IO would have been
+the obvious pick, and it would have brought a reconnect protocol, a fallback
+transport and a client bundle to solve problems this app does not have: every
+browser it targets speaks WebSockets, and the reconnect it needs is twenty lines
+of backoff.
+
+What the choice buys is that every line that runs is in this folder. There is
+no lockfile to audit, no transitive package that can be compromised upstream,
+and nothing between a deploy and the code that was read. The WebSocket layer
+is the largest thing written by hand, and it is about two hundred lines against
+a stable RFC. The cost is that everything a library would have handled has to
+be handled here, which is why the transport section below lists its own
+protocol checks.
 
 ## Layout
 
@@ -41,6 +44,8 @@ debate-live/
   archive.js          # concluded debates on disk
   resultpage.js       # the permalink page, server-rendered
   public/index.html   # the entire frontend, markup, CSS and JS
+  homesite/           # the ComradeCoding homepage, served on its own hosts
+  tools/              # image utilities, run by hand, never at serve time
   test-clients.js     # protocol-level end-to-end tests
   data/               # archived debates, one JSON file each (gitignored)
 ```
@@ -66,7 +71,15 @@ running clock is state, so the schedule and the timer live apart.
    and broadcast. They return an ack payload; failure is `{ error: "…" }`, never
    a thrown exception.
 4. **HTTP + wiring.** Static file serving with a path-traversal guard, the
-   `/d/<id>` permalink route, the upgrade handler, and a 30-second heartbeat.
+   Host-header split between the two sites, the `/d/<id>` permalink route, the
+   generated `robots.txt` and sitemap, the upgrade handler with its origin
+   check, a per-connection rate limit, and a 30-second heartbeat.
+
+The rate limit is a token bucket per connection: a burst of 20 messages,
+refilling at 10 a second. Over that, an acked request gets `{ error: 'Slow
+down.' }` and an unacked one is dropped. A client that keeps pushing through
+200 refusals in a row is disconnected. It is sized so no person typing can hit
+it and a script flooding broadcasts runs dry within two seconds.
 
 Live room state is in memory, so restarting the server clears every room in
 progress. Concluded debates are on disk and survive.
@@ -295,17 +308,20 @@ and `/arena` is the app on any host, which is what puts MasterDebater at
 `/d/` permalinks sit above the split entirely, so a settled debate shares from
 either domain.
 
-The homepage ships four images, all of them supplied by the owner: three
-animated GIFs (a hammer and sickle, a dancing Marx, a pixel-art book) and one
-transparent portrait. Everything else is drawn in CSS. It is a Geocities
-pastiche done honestly: the
+The homepage ships eight images, all of them supplied by the owner. Four are
+animated GIFs: the hammer and sickle, a dancing Marx, a pixel-art book and a
+guestbook mouse. Four are PNGs: the Ziggy portrait in the opposite corner, and
+three nav icons (Trotsky, the boxing ring, and the Athletics fighter).
+Everything else is drawn in CSS. It is a Geocities pastiche done honestly: the
 animations run on `steps()` so they flicker like 8-frame GIFs, the marquee tags
 are real, and the table layout is load-bearing on purpose.
 
-It carries one script, `midi.js`, which synthesizes The Internationale with two
+It carries two scripts. `midi.js` synthesizes The Internationale with two
 oscillators rather than shipping or embedding audio. The composition (De Geyter,
 1888) is public domain; no recording of anyone's performance is involved, and
-nothing is downloaded to play it. The script sits in its own file rather than
+nothing is downloaded to play it. `bounce.js` sets Ziggy drifting round the
+window, and keeps its motion in one pure function so the tests can check the
+edge cases a running page never shows. Both sit in their own files rather than
 inline, so the page runs under `script-src 'self'` and inline execution stays
 banned, which is still tighter than the app's `'unsafe-inline'`.
 
@@ -503,7 +519,12 @@ debate, prints PASS/FAIL per check, and exits nonzero on any failure. Set
 Archived records go to a throwaway directory, so a run never lands in your own
 archive.
 
-94 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so a six-turn
+There is no test framework, for the same reason there is no Socket.IO. A check
+is a name and a boolean, and the runner is forty lines at the top of the file.
+Node 22 ships a global `WebSocket` client, so the tests speak to the server
+through the same API a browser uses.
+
+137 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so a six-turn
 format runs in six seconds rather than thirteen minutes.
 
 The first 40 cover the live room: lobby push on connect, topic
@@ -516,7 +537,7 @@ histories and seat state, server-side truncation of a 5000-character message to
 1000, raw storage of markup, the lobby listing, seat release, and a debater's
 disconnect freeing their seat.
 
-The remaining 31 cover the verdict and the record: an entry stance recorded at
+The next 31 cover the verdict and the record: an entry stance recorded at
 join and the fact that re-joining cannot rewrite it, the undecided count in the
 live tally, all four conclusion guards, a hand-computed verdict checked figure by
 figure (panel, opening tally, closing tally, swing, winner, floor-crossings), a
@@ -528,7 +549,7 @@ itself: it serves the record, states the verdict, carries the transcript, runs n
 script, 404s on an unknown id, rejects a traversal attempt in the id, and renders
 stored markup inert.
 
-The last 23 cover the format: a room starting with no format running, the
+The next 23 cover the format: a room starting with no format running, the
 audience being unable to call it to order, the guard on an unfilled seat, the
 stage staying open during warm-up, PRO opening, the six-turn schedule, refusing
 to start twice, the floor blocking the side that does not hold it, a turn
@@ -539,8 +560,21 @@ refilled seat resuming the same turn rather than restarting it, and the last
 turn settling the debate on its own with a normal record and a working
 permalink.
 
-Playwright is not installable here (no npm), so the browser pass was driven
-against live tabs. Verified in the real DOM: create, claim PRO, post; a second
+The next 31 cover the mothership: Host-header routing to the homepage on both
+home hosts and the app everywhere else, `/home` and `/arena` crossing the split,
+the homepage's stricter script policy and its `media-src` allowance, the
+bouncing corner's pure step function (never leaving the window, turning at the
+edges, surviving a backgrounded tab's long frame gap, parking in a window
+smaller than itself), `robots.txt` and the sitemap, and every homepage asset
+serving on both hosts with the right type.
+
+The last 12 cover the GIF codec: LZW round trips at every code width, the
+dictionary rebuilding when it fills, every homepage GIF surviving decode,
+encode and decode unchanged, and the three icons staying under their byte
+budgets at a whole multiple of their drawn size.
+
+The browser pass was driven by hand against live tabs. Verified in the real
+DOM: create, claim PRO, post; a second
 participant claiming CON and replying; audience-only view with a hint instead of
 a composer; cross-tab delivery of stage messages, audience messages, system
 lines and the typing indicator; the lobby updating live as seats fill; the
