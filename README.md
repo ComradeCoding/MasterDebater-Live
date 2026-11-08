@@ -18,8 +18,10 @@ server with. Development and production both run Node 24.
 
 ## Zero dependencies
 
-There is no `npm install` and no build step, and that is a choice rather than a
-workaround. The server is built-in `http` plus a hand-rolled RFC 6455 WebSocket
+Running the app needs no `npm install` and no build step, and that is a choice
+rather than a workaround. The one package in `package.json` is Playwright, as a
+dev dependency for the browser tests; nothing the server runs comes from
+`node_modules`. The server is built-in `http` plus a hand-rolled RFC 6455 WebSocket
 implementation; the client is one static HTML file. Socket.IO would have been
 the obvious pick, and it would have brought a reconnect protocol, a fallback
 transport and a client bundle to solve problems this app does not have: every
@@ -50,6 +52,8 @@ debate-live/
   homesite/           # the ComradeCoding homepage, served on its own hosts
   tools/              # image codecs and utilities, mostly run by hand
   test-clients.js     # protocol-level end-to-end tests
+  tests/              # the browser pass, in Playwright
+  playwright.config.js
   data/               # archived debates and live.sqlite (gitignored)
 ```
 
@@ -796,8 +800,18 @@ happen here", so nothing else is allowed to compete with it.
 ## Tests
 
 ```bash
-node test-clients.js
+node test-clients.js      # the protocol, 262 checks, no dependencies
+npm install               # once, for the browser pass only
+npx playwright install chromium
+npm run test:browser      # the page, in real Chromium tabs
 ```
+
+Two suites, for two different questions. The protocol suite asks whether the
+server does the right thing, and it needs nothing but Node. The browser suite
+asks whether the page shows what the server said, in the right place, inert,
+and that genuinely needs a browser.
+
+### The protocol suite
 
 Spawns its own server on port 3111, drives real WebSocket clients through a full
 debate, prints PASS/FAIL per check, and exits nonzero on any failure. Set
@@ -917,31 +931,40 @@ dictionary rebuilding when it fills, every homepage GIF surviving decode,
 encode and decode unchanged, and the three icons staying under their byte
 budgets at a whole multiple of their drawn size.
 
-The browser pass was driven by hand against live tabs. Verified in the real
-DOM: create, claim PRO, post; a second
-participant claiming CON and replying; audience-only view with a hint instead of
-a composer; cross-tab delivery of stage messages, audience messages, system
-lines and the typing indicator; the lobby updating live as seats fill; the
-composer appearing the instant a seat ack lands; `<img src=x onerror=…>` as a
-display name and `<script>alert(1)</script>` as a message both rendering as inert
-text with zero injected nodes; closing the PRO tab freeing the seat in the
-others; and the reconnect path, exercised by dropping the socket through a TCP
-proxy, where the client backed off, reconnected, rejoined the still-live room
-with both histories replayed, and correctly did not reclaim its old seat.
+### The browser suite
 
-The format was verified in the browser too. Seated as PRO with an opponent on
-the wire: the start row appearing only once both seats were filled, the floor bar
-opening blue at "Opening 1/6" with a draining clock, posting on the floor,
-yielding flipping the bar red to "CON has the floor" with the composer going
-inert and saying so, and then dropping the opponent's connection, which froze
-the clock at 2:49, greyed the bar, and locked both sides out.
+Playwright is the one dependency in the project, and it is a dev dependency:
+`npm start` still installs nothing and the server still loads nothing from
+`node_modules`. It drives the pass this section used to describe as done by
+hand, so it now runs on every change instead of once. The config starts its own
+server on port 3122 with a throwaway archive, the same way the protocol suite
+does. Each participant is a separate browser context, which is separate
+storage and therefore a separate voter, exactly like separate people, and any
+uncaught error in any page fails the test that opened it.
 
-The verdict path was verified the same way, against a hand-computed expectation.
-Two debaters and two voters, opening at PRO 0 / undecided 1 / CON 1 and closing
-at PRO 2, with one voter crossing the floor. Predicted +3 to PRO, and that is
-what the result card, the archived JSON and the permalink all showed. The
-participants were disconnected and reconnected partway through, which also
-confirmed that entry stances survive a dropped connection.
+One end-to-end debate in five tabs: create a room, claim PRO under a handle and
+post; the lobby updating live as the seat fills; a drifter claiming CON and
+closing their tab, which frees the seat in the other tabs; a second person
+joining from the lobby, seeing the history replayed, claiming CON and replying;
+the audience view with a hint instead of a composer, sidebar chat delivered
+across tabs, and a lean moving the gauge; the typing indicator crossing tabs;
+`<img src=x onerror=a()>` as a display name and a `<script>` tag as a message
+both rendering as inert text, with zero injected nodes and nothing executed in
+any tab; the start row only for the debaters, the floor bar opening PRO with
+the other composer inert and saying why, posting on the floor and yielding it
+across; the two-click call, the result card replacing every composer, the swing
+and the headline, Rematch shown to the two debaters and to nobody else; the
+permalink rendering the record under its no-script policy; and the rematch
+swapping the seats in both tabs.
+
+Then the archive's search running as a real form, a debater's page showing the
+loss from their side, and a challenge posted in one tab and taken in another,
+with both landing on the stage seated on the right sides.
+
+What is still checked by hand is the reconnect path through a dropped TCP
+connection, which needs a proxy between the browser and the server, and
+anything visual that a selector cannot judge, such as whether the tilt on a
+pasted slip lands on top of the bar below it.
 
 ## Acceptance walkthrough
 

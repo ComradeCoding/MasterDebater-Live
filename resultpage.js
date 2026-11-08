@@ -298,6 +298,7 @@ function render(record, origin) {
   /* The one that was put to the debaters, pasted on like the stage pin. */
   .questions li.pinned {
     background: var(--paper); color: var(--ink); padding: 12px 14px; margin: 8px 0;
+    max-width: 640px;
     border: 0; box-shadow: var(--paste) var(--neon); transform: rotate(var(--tilt));
   }
   .questions li.pinned .v, .questions li.pinned .who { color: var(--neon-deep); }

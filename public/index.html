@@ -753,9 +753,13 @@
   /* The pinned question is a slip of paper stuck over the stage: paper on
      ink, the one rotation, the one shadow. It is the floor speaking, so it
      wears the overprint violet rather than either side's ink. */
+  /* Capped in width: one rotation across the whole stage would turn a tilt
+     into a slope and drop the far end onto the floor bar. */
   .pinq {
     flex-shrink: 0;
-    margin: 12px 22px 8px;
+    align-self: flex-start;
+    max-width: min(620px, calc(100% - 44px));
+    margin: 14px 22px 12px;
     padding: 12px 16px;
     background: var(--paper);
     color: var(--ink);

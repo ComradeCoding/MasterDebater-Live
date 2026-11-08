@@ -13,3 +13,7 @@ node_modules/
 
 # archived debates: real user records, not build output
 data/
+
+# Playwright output
+test-results/
+playwright-report/
