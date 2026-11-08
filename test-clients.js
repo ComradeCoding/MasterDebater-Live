@@ -37,6 +37,9 @@ const ARCHIVE_DIR = path.join(
   require('os').tmpdir(), `debate-test-archive-${process.pid}`
 );
 
+const CHALLENGE_TTL_MS = 2500;
+const CHALLENGE_ORPHAN_MS = 700;
+
 let failures = 0;
 let checks = 0;
 function check(name, condition, detail) {
@@ -99,7 +102,11 @@ function makeClient(label) {
 async function startServer() {
   if (!SPAWN_SERVER) return null;
   const proc = spawn(process.execPath, [path.join(__dirname, 'server.js')], {
-    env: { ...process.env, PORT: String(TEST_PORT), ARCHIVE_DIR, DEBATE_TURN_SECONDS: '1' },
+    env: {
+      ...process.env, PORT: String(TEST_PORT), ARCHIVE_DIR, DEBATE_TURN_SECONDS: '1',
+      // A day and five minutes, collapsed so the board's timers can be watched.
+      CHALLENGE_TTL_MS: String(CHALLENGE_TTL_MS), CHALLENGE_ORPHAN_MS: String(CHALLENGE_ORPHAN_MS),
+    },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   await new Promise((resolve, reject) => {
@@ -607,6 +614,130 @@ async function runFormat() {
     String(page.status));
 
   [pro, con, watcher].forEach((c) => c.close());
+  await wait(150);
+
+  await runChallenges();
+}
+
+// ==========================================================================
+// The challenge board
+// ==========================================================================
+// The server runs with a 2.5 second expiry and a 0.7 second orphan window, so
+// each challenge below is taken or withdrawn well inside its lifetime, and the
+// two timed deaths are watched on purpose at the end.
+
+async function runChallenges() {
+  const ann = makeClient('ann');     // posts
+  const ben = makeClient('ben');     // accepts
+  const cat = makeClient('cat');     // just watching the board
+  await Promise.all([ann.open, ben.open, cat.open]);
+  await wait(80);
+  const latest = () => cat.got('lobby:challenges').slice(-1)[0] || [];
+  check('the board is pushed on connect', Array.isArray(cat.got('lobby:challenges')[0]),
+    JSON.stringify(cat.got('lobby:challenges')[0]));
+
+  const noMotion = await ann.emit('challenge:post', { motion: '  ', side: 'pro', name: 'Ann' });
+  check('a challenge needs a motion', !!noMotion.error);
+  const noSide = await ann.emit('challenge:post', { motion: 'Cats beat dogs', side: 'both', name: 'Ann' });
+  check('a challenge needs a side', !!noSide.error);
+
+  const posted = await ann.emit('challenge:post',
+    { motion: 'Cats beat dogs', side: 'con', name: 'Ann', voterId: 'ch-ann' });
+  check('a visitor can post a motion and take one side',
+    posted.ok && posted.challenge && posted.challenge.side === 'con' && posted.challenge.name === 'Ann',
+    JSON.stringify(posted));
+  await wait(80);
+  check('the challenge goes up on everyone\'s board',
+    latest().some((c) => c.id === posted.challenge.id && c.motion === 'Cats beat dogs'));
+  check('the board never shows the poster\'s browser id',
+    !JSON.stringify(latest()).includes('ch-ann'), JSON.stringify(latest()));
+
+  const twice = await ann.emit('challenge:post', { motion: 'Second one', side: 'pro', name: 'Ann' });
+  check('one challenge per person at a time', !!twice.error, JSON.stringify(twice));
+  const own = await ann.emit('challenge:accept', { challengeId: posted.challenge.id });
+  check('you cannot take the other side of your own challenge', !!own.error);
+
+  const out = await ann.emit('challenge:withdraw');
+  await wait(80);
+  check('withdrawing takes it off the board',
+    out.ok && !latest().some((c) => c.id === posted.challenge.id));
+
+  // --- a match -------------------------------------------------------------
+  const real = await ann.emit('challenge:post',
+    { motion: 'Cats beat dogs', side: 'con', name: 'Ann', voterId: 'ch-ann' });
+  const annFound = new Promise((r) => { ann.on('match:found', r); setTimeout(() => r(null), 2000); });
+  const benFound = new Promise((r) => { ben.on('match:found', r); setTimeout(() => r(null), 2000); });
+  const took = await ben.emit('challenge:accept',
+    { challengeId: real.challenge.id, name: 'Ben', voterId: 'ch-ben' });
+  check('someone can accept the other side', took.ok && typeof took.roomId === 'string', JSON.stringify(took));
+  const [a, b] = await Promise.all([annFound, benFound]);
+  check('both are pushed match:found with the same room',
+    a && b && a.roomId === took.roomId && b.roomId === took.roomId,
+    JSON.stringify([a && a.roomId, b && b.roomId, took.roomId]));
+  check('the poster arrives seated on the side they posted',
+    a && a.join.role === 'con' && a.join.room.conName === 'Ann', JSON.stringify(a && a.join.room));
+  check('the taker arrives seated on the other side',
+    b && b.join.role === 'pro' && b.join.room.proName === 'Ben', JSON.stringify(b && b.join.room));
+  check('the matched room carries the motion', b && b.join.room.topic === 'Cats beat dogs');
+  await wait(80);
+  check('a taken challenge comes off the board', !latest().some((c) => c.id === real.challenge.id));
+  const argue = await ben.emit('debate:message', { text: 'Dogs need you; cats tolerate you.' });
+  check('the matched pair can argue straight away', !argue.error, JSON.stringify(argue));
+  const gone = await cat.emit('challenge:accept', { challengeId: real.challenge.id, name: 'Cat' });
+  check('a taken challenge cannot be taken twice', !!gone.error);
+
+  const lobby = cat.got('lobby:rooms').slice(-1)[0];
+  check('the matched room is on the live floor',
+    lobby && lobby.some((r) => r.id === took.roomId && r.proTaken && r.conTaken));
+
+  // --- a seated debater cannot be pulled out of a live debate ---------------
+  const busy = await ben.emit('challenge:post', { motion: 'Mid-debate', side: 'pro', name: 'Ben' });
+  const pull = await cat.emit('challenge:accept', { challengeId: busy.challenge.id, name: 'Cat' });
+  check('a poster in a live seat cannot be matched out of it', !!pull.error, JSON.stringify(pull));
+  await ben.emit('challenge:withdraw');
+
+  // --- the poster stepping away -------------------------------------------
+  const dan = makeClient('dan');
+  await dan.open;
+  const dans = await dan.emit('challenge:post',
+    { motion: 'Pineapple belongs on pizza', side: 'pro', name: 'Dan', voterId: 'ch-dan' });
+  dan.close();
+  await wait(120);
+  const away = latest().find((c) => c.id === dans.challenge.id);
+  check('a dropped poster\'s challenge stays up, marked away', away && away.away === true,
+    JSON.stringify(away));
+  const whileAway = await cat.emit('challenge:accept', { challengeId: dans.challenge.id, name: 'Cat' });
+  check('nobody can take a challenge while its poster is away', !!whileAway.error);
+
+  const dan2 = makeClient('dan2');
+  await dan2.open;
+  const back = await dan2.emit('challenge:reclaim', { voterId: 'ch-dan' });
+  check('a reload reclaims the challenge before it dies', back.challengeId === dans.challenge.id,
+    JSON.stringify(back));
+  await wait(CHALLENGE_ORPHAN_MS + 200);
+  const kept = latest().find((c) => c.id === dans.challenge.id);
+  check('a reclaimed challenge survives the grace period', kept && kept.away === false,
+    JSON.stringify(kept));
+  await dan2.emit('challenge:withdraw');
+  dan2.close();
+
+  const eve = makeClient('eve');
+  await eve.open;
+  const eves = await eve.emit('challenge:post',
+    { motion: 'Tabs over spaces', side: 'con', name: 'Eve', voterId: 'ch-eve' });
+  eve.close();
+  await wait(CHALLENGE_ORPHAN_MS + 300);
+  check('a challenge dies when its poster stays away past the grace period',
+    !latest().some((c) => c.id === eves.challenge.id));
+
+  // --- expiry ----------------------------------------------------------------
+  const old = await cat.emit('challenge:post',
+    { motion: 'Nothing lasts', side: 'pro', name: 'Cat', voterId: 'ch-cat' });
+  await wait(CHALLENGE_TTL_MS + 300);
+  check('a challenge expires when nobody takes it in time',
+    !latest().some((c) => c.id === old.challenge.id));
+
+  [ann, ben, cat].forEach((c) => c.close());
   await wait(150);
 
   await runHomesite();

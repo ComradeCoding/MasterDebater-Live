@@ -277,14 +277,78 @@ const MAX_ROOMS = 200; // hard cap so room:create spam can't exhaust memory
 const MAX_VOTER_ID_LEN = 40;
 const MAX_BALLOTS = 5000; // per room; a ballot is tiny, but nothing is unbounded
 const EMPTY_ROOM_TTL = 5 * 60 * 1000;
+// The challenge board. A challenge waits a day for a taker, and dies sooner if
+// the person who posted it has been gone for as long as an empty room is kept.
+// Both have test seams, for the same reason the turn length does.
+const CHALLENGE_TTL = Number(process.env.CHALLENGE_TTL_MS) || 24 * 60 * 60 * 1000;
+const CHALLENGE_ORPHAN_TTL = Number(process.env.CHALLENGE_ORPHAN_MS) || EMPTY_ROOM_TTL;
+const MAX_CHALLENGES = 100;
 
 const store = (() => {
   const rooms = new Map(); // roomId -> room
+  const challenges = new Map(); // challengeId -> challenge, oldest first
   let nextMessageId = 1;
 
   const newRoomId = () => crypto.randomBytes(3).toString('hex');
 
   return {
+    // --- the challenge board ------------------------------------------------
+    // `key` is the poster's browser-held id, which is how a reload finds its
+    // own challenge again. It never leaves the server: it is also the ballot
+    // id, and a ballot id is not something to publish.
+    postChallenge({ motion, side, name, key, poster }) {
+      let id;
+      do { id = crypto.randomBytes(4).toString('hex'); } while (challenges.has(id));
+      const now = Date.now();
+      const ch = {
+        id, motion, side, name, key, poster,
+        createdAt: now,
+        expiresAt: now + CHALLENGE_TTL,
+        expiryTimer: null,
+        orphanTimer: null,
+      };
+      challenges.set(id, ch);
+      return ch;
+    },
+    getChallenge(id) { return challenges.get(id) || null; },
+    listChallenges() { return [...challenges.values()]; },
+    challengeByKey(key) {
+      for (const ch of challenges.values()) if (ch.key === key) return ch;
+      return null;
+    },
+    removeChallenge(ch) {
+      if (ch.expiryTimer) clearTimeout(ch.expiryTimer);
+      if (ch.orphanTimer) clearTimeout(ch.orphanTimer);
+      challenges.delete(ch.id);
+    },
+    // One timer per challenge, armed once, the same shape as the turn timer.
+    armChallengeExpiry(ch, onExpire) {
+      ch.expiryTimer = setTimeout(() => {
+        if (challenges.get(ch.id) !== ch) return;
+        this.removeChallenge(ch);
+        onExpire();
+      }, Math.max(0, ch.expiresAt - Date.now()));
+      if (ch.expiryTimer.unref) ch.expiryTimer.unref();
+    },
+    // The room-emptiness pattern: a grace period, re-checked when it fires,
+    // so a poster who reloads or drops for a moment keeps their place.
+    orphanChallenge(ch, onExpire) {
+      ch.poster = null;
+      if (ch.orphanTimer) return;
+      ch.orphanTimer = setTimeout(() => {
+        ch.orphanTimer = null;
+        if (challenges.get(ch.id) !== ch || ch.poster) return;
+        this.removeChallenge(ch);
+        onExpire();
+      }, CHALLENGE_ORPHAN_TTL);
+      if (ch.orphanTimer.unref) ch.orphanTimer.unref();
+    },
+    adoptChallenge(ch, client) {
+      ch.poster = client;
+      if (ch.orphanTimer) { clearTimeout(ch.orphanTimer); ch.orphanTimer = null; }
+    },
+
+    // --- rooms ----------------------------------------------------------------
     createRoom(topic) {
       let id;
       do { id = newRoomId(); } while (rooms.has(id));
@@ -441,6 +505,30 @@ function broadcastLobby() {
   for (const c of clients) c.ws.send(frame);
 }
 
+// What the board shows. Never the key: see `postChallenge`.
+function challengeSummary(ch) {
+  return {
+    id: ch.id,
+    motion: ch.motion,
+    side: ch.side,
+    name: ch.name,
+    createdAt: ch.createdAt,
+    expiresAt: ch.expiresAt,
+    // The poster's connection dropped and the grace period is running. The
+    // challenge stays up, but nobody can take it until they are back.
+    away: !ch.poster,
+  };
+}
+
+function challengeList() {
+  return store.listChallenges().map(challengeSummary);
+}
+
+function broadcastChallenges() {
+  const frame = JSON.stringify({ type: 'lobby:challenges', data: challengeList() });
+  for (const c of clients) c.ws.send(frame);
+}
+
 function broadcastResults() {
   const frame = JSON.stringify({ type: 'lobby:results', data: archive.list() });
   for (const c of clients) c.ws.send(frame);
@@ -494,6 +582,33 @@ function leaveRoom(client) {
   store.scheduleReap(room, broadcastLobby);
 }
 
+// The board is used from the lobby, where nobody has been through the join
+// modal yet, so posting and accepting carry their own name and browser id.
+function identify(client, name, voterId) {
+  const n = clean(name, MAX_NAME_LEN);
+  // Not mid-room: a rename there would change who the stage says is talking.
+  if (n && !client.room) client.name = n;
+  if (!client.name) client.name = 'Guest';
+  const v = clean(voterId, MAX_VOTER_ID_LEN);
+  if (v && !client.voterId) client.voterId = v;
+  if (!client.voterId) client.voterId = `anon-${client.id}`;
+}
+
+const isSeatedLive = (c) =>
+  !!c.room && c.room.status === 'live' && (c.role === 'pro' || c.role === 'con');
+
+// A dropped poster keeps their challenge for the grace period, not forever.
+function orphanChallenges(client) {
+  let changed = false;
+  for (const ch of store.listChallenges()) {
+    if (ch.poster !== client) continue;
+    store.orphanChallenge(ch, broadcastChallenges);
+    changed = true;
+  }
+  // The board says who is away, so it changes the moment they go.
+  if (changed) broadcastChallenges();
+}
+
 // Everything a client needs to draw a room it has just entered. Shared by the
 // ordinary join and by the paths that land someone straight in a seat, so all
 // of them paint the same first frame.
@@ -534,7 +649,19 @@ function enterSeated(room, client, side) {
     text: `${client.name} takes the ${side.toUpperCase()} side`,
     ts: Date.now(),
   });
-  return joinPayload(room, client, ballot);
+  return ballot;
+}
+
+// Seats two people at once and hands each their first frame. The payloads are
+// built after both are seated, so neither sees the other's seat as still open.
+function seatPair(room, a, aSide, b, bSide) {
+  const aBallot = enterSeated(room, a, aSide);
+  const bBallot = b ? enterSeated(room, b, bSide) : null;
+  publishRoom(room);
+  return {
+    a: joinPayload(room, a, aBallot),
+    b: b ? joinPayload(room, b, bBallot) : null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -784,13 +911,8 @@ const handlers = {
     next.rematchOf = room.id;
     room.rematchId = next.id;
 
-    const mine = enterSeated(next, client, otherSide);
-    if (other) {
-      const theirs = enterSeated(next, other, side);
-      sendTo(other, 'room:rematch', { roomId: next.id, by: client.name, join: theirs });
-    }
-    publishRoom(next);
-    store.scheduleReap(next, broadcastLobby);
+    const joined = seatPair(next, client, otherSide, other, side);
+    if (other) sendTo(other, 'room:rematch', { roomId: next.id, by: client.name, join: joined.b });
 
     // Everyone left watching the old result gets a way in.
     broadcastRoom(room, 'debate:system', {
@@ -799,9 +921,7 @@ const handlers = {
       ts: Date.now(),
       roomId: next.id,
     });
-    // Refresh the lobby for the new room's seat state too.
-    broadcastLobby();
-    return { roomId: next.id, join: { ...mine, room: roomSummary(next) } };
+    return { roomId: next.id, join: joined.a };
   },
 
   'room:leave'(client) {
@@ -985,6 +1105,83 @@ const handlers = {
     });
     advanceTurn(room);
     return { ok: true };
+  },
+
+  // ---- the challenge board -------------------------------------------------
+  // A board, not a queue. Instant matching needs a crowd waiting on both sides
+  // of the same motion at the same moment, which a small site never has, so a
+  // queue would read as broken. A posted stance just sits here until somebody
+  // wants the other side of it.
+
+  'challenge:post'(client, { motion, side, name, voterId } = {}) {
+    motion = clean(motion, MAX_TOPIC_LEN);
+    if (!motion) return { error: 'Give it a motion first.' };
+    if (side !== 'pro' && side !== 'con') return { error: 'Pick PRO or CON.' };
+    identify(client, name, voterId);
+    if (store.challengeByKey(client.voterId)) {
+      return { error: 'You already have a challenge up. Withdraw it first.' };
+    }
+    if (store.listChallenges().length >= MAX_CHALLENGES) {
+      return { error: 'The board is full. Take one of the challenges on it.' };
+    }
+    const ch = store.postChallenge({ motion, side, name: client.name, key: client.voterId, poster: client });
+    store.armChallengeExpiry(ch, broadcastChallenges);
+    broadcastChallenges();
+    return { ok: true, challenge: challengeSummary(ch) };
+  },
+
+  'challenge:withdraw'(client, { challengeId } = {}) {
+    const ch = challengeId ? store.getChallenge(challengeId) : store.challengeByKey(client.voterId);
+    if (!ch || (ch.poster !== client && ch.key !== client.voterId)) {
+      return { error: 'You have no challenge up.' };
+    }
+    store.removeChallenge(ch);
+    broadcastChallenges();
+    return { ok: true };
+  },
+
+  // A reload is a new connection. The browser's id finds the challenge it
+  // posted and puts it back in this connection's hands, cancelling the timer
+  // that would otherwise take it off the board.
+  'challenge:reclaim'(client, { voterId } = {}) {
+    const key = clean(voterId, MAX_VOTER_ID_LEN);
+    if (!key) return { ok: true, challengeId: null };
+    const ch = store.challengeByKey(key);
+    if (!ch) return { ok: true, challengeId: null };
+    if (!client.voterId) client.voterId = key;
+    const wasAway = !ch.poster;
+    store.adoptChallenge(ch, client);
+    if (!client.name) client.name = ch.name;
+    if (wasAway) broadcastChallenges();
+    return { ok: true, challengeId: ch.id };
+  },
+
+  'challenge:accept'(client, { challengeId, name, voterId } = {}) {
+    const ch = typeof challengeId === 'string' ? store.getChallenge(challengeId) : null;
+    if (!ch) return { error: 'That challenge has already been taken or withdrawn.' };
+    identify(client, name, voterId);
+    if (ch.poster === client || ch.key === client.voterId) {
+      return { error: 'You cannot take the other side of your own challenge.' };
+    }
+    const poster = ch.poster;
+    if (!poster || !poster.ws.open) return { error: 'They stepped away. Try again in a minute.' };
+    // Moving someone out of a debate in progress would break that debate, so
+    // neither side of a match can be pulled from a live seat.
+    if (isSeatedLive(poster)) return { error: 'They are in the middle of another debate.' };
+    if (isSeatedLive(client)) return { error: 'Step down from your seat first.' };
+    if (store.listRooms().length >= MAX_ROOMS) {
+      return { error: 'Too many live debates right now. Try again soon.' };
+    }
+
+    store.removeChallenge(ch);
+    const room = store.createRoom(ch.motion);
+    room.fromChallenge = ch.id;
+    const otherSide = ch.side === 'pro' ? 'con' : 'pro';
+    const joined = seatPair(room, poster, ch.side, client, otherSide);
+    sendTo(poster, 'match:found', { roomId: room.id, by: client.name, join: joined.a });
+    sendTo(client, 'match:found', { roomId: room.id, by: ch.name, join: joined.b });
+    broadcastChallenges();
+    return { ok: true, roomId: room.id };
   },
 
   'debate:typing'(client, { isTyping } = {}) {
@@ -1273,6 +1470,7 @@ server.on('upgrade', (req, socket) => {
   sendTo(client, 'lobby:rooms',
     store.listRooms().filter((r) => r.status === 'live').map(roomSummary));
   sendTo(client, 'lobby:results', archive.list());
+  sendTo(client, 'lobby:challenges', challengeList());
 
   ws.onmessage = (raw) => {
     let msg;
@@ -1321,6 +1519,7 @@ server.on('upgrade', (req, socket) => {
 
   ws.onclose = () => {
     leaveRoom(client);
+    orphanChallenges(client);
     clients.delete(client);
   };
 });
@@ -1330,6 +1529,7 @@ const heartbeat = setInterval(() => {
   for (const client of clients) {
     if (!client.ws.open) {
       leaveRoom(client);
+      orphanChallenges(client);
       clients.delete(client);
       continue;
     }

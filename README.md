@@ -145,8 +145,9 @@ does not care how it got there.
 Room summary: `{ id, topic, createdAt, status, proTaken, conTaken, proName,
 conName, audienceCount }`.
 
-Joining always lands you in the audience. Seats are only ever claimed
-explicitly, including after a reconnect.
+Joining always lands you in the audience. Seats are claimed explicitly,
+including after a reconnect. The two exceptions are a rematch and an accepted
+challenge, where the act that seats you is the request itself; see below.
 
 `audience:lean` moves you onto a side, and you can keep swapping between the two
 for as long as the debate runs, but there is no message that puts you back on
@@ -596,7 +597,7 @@ is a name and a boolean, and the runner is forty lines at the top of the file.
 Node 22 ships a global `WebSocket` client, so the tests speak to the server
 through the same API a browser uses.
 
-152 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so a six-turn
+177 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so a six-turn
 format runs in six seconds rather than thirteen minutes.
 
 The first 40 cover the live room: lobby push on connect, topic
@@ -635,6 +636,16 @@ acting, an emptied seat stopping the clock and freezing both sides out, a
 refilled seat resuming the same turn rather than restarting it, and the last
 turn settling the debate on its own with a normal record and a working
 permalink.
+
+The next 25 cover the challenge board: it is pushed on connect, a challenge
+needs a motion and a side, it goes up on every board without the poster's
+browser id, one per person, no taking your own, withdrawing, a match pushing
+both people into one room seated on the right sides with the motion, the
+challenge coming off the board and refusing a second taker, the room on the
+live floor with both arguing straight away, a seated debater not being pulled
+out of a live debate, a dropped poster marked away and untakeable, a reload
+reclaiming it inside the grace period, and the two timed deaths: a poster gone
+past the grace period, and nobody taking it in time.
 
 The next 31 cover the mothership: Host-header routing to the homepage on both
 home hosts and the app everywhere else, `/home` and `/arena` crossing the split,
@@ -705,25 +716,17 @@ as separate ballots, since one browser profile is deliberately one voter.
 - **Archive growth.** Unbounded on disk, by design. There is no pruning job and
   deliberately so.
 
-## Not built: instant match
+## The challenge board
 
-Considered and deliberately left out. Notes kept so the reasoning survives.
+Instant matching was considered first and left out, and the reasoning is kept
+because the board is built on it.
 
-A ChatRoulette-style mode where you press a button and get dropped straight into
-an argument with a stranger. It fits this codebase cheaply, because a matched
-debate is just an ordinary room with both seats already filled: the stage,
-history, audience sidebar, typing relay, reconnect, the disconnect path that
-frees a seat, and now the verdict and the permalink all work unchanged.
-
-What it would take:
-
-- a queue in the store, `motionId -> { pro: [], con: [] }`
-- handlers for `match:queue { motion, side }`, `match:cancel`, `match:next`
-- on a pair: `store.createRoom(motion)`, seat both clients, push
-  `match:found { roomId }` to each
-- a seed pool of motions and a lobby view for the queue
-
-Two things worth remembering if it ever gets built:
+A ChatRoulette-style mode, where you press a button and get dropped straight
+into an argument with a stranger, fits this codebase cheaply: a matched debate
+is just an ordinary room with both seats already filled, so the stage, history,
+audience sidebar, typing relay, reconnect, the disconnect path that frees a
+seat, the verdict and the permalink all work unchanged. Two things argued
+against building it as a queue.
 
 **Pair on disagreement, not availability.** ChatRoulette matches whoever happens
 to be free. A debate should match a PRO against a CON on the same motion, so the
@@ -731,10 +734,49 @@ argument is real. Availability-matching is the obvious port and the worse
 product.
 
 **Instant matching needs traffic it will not have.** With a handful of users
-online the queue never fills and the feature reads as broken. It should degrade
-into a visible challenge board: a stance sits on the board until someone accepts
-the other side, and live matching becomes the fast path for when both sides are
-already waiting. Same feature, no empty-queue dead end, works on day one.
+online the queue never fills and the feature reads as broken. So it is built as
+the thing the queue should degrade into: a visible board. A visitor posts a
+motion and takes one side; it sits on the board until somebody accepts the
+other side. Same feature, no empty-queue dead end, works on day one, and live
+matching is just what the board does when both sides happen to be online.
 
-Seating both clients directly is the one place this breaks the current protocol
-rule that everyone arrives as audience and claims a seat explicitly.
+The board sits above the live floor in the lobby, because a challenge is an
+open invitation and a live room is something already happening. Nothing is
+seeded. An empty board shows one line inviting the first post, rather than a
+handful of fake motions that would make the site look busier than it is.
+
+When a challenge is taken, the server creates a room with the motion, seats the
+poster on the side they posted and the taker on the other, and pushes
+`match:found` to both with the same join payload a normal join returns.
+
+**This is where someone arrives seated**, as the notes above always predicted.
+The rule that everyone joins as audience exists so taking a seat is a
+deliberate act, and posting or taking a challenge is that act. Neither of them
+goes through the stance modal either: a stance is evidence for the verdict, and
+anyone seated is struck from the panel anyway. The rematch is the other path
+that seats people directly, for the same reason. Nobody is ever moved out of a
+live seat to fill one: a challenge cannot be taken while either party is
+mid-debate, since that would break the debate they are in.
+
+**Lifetimes.** A challenge expires after 24 hours. It also dies if its poster
+disconnects and stays gone for five minutes, the same grace period, and the same
+re-check-when-the-timer-fires pattern, as an empty room. While the poster is
+away the challenge stays up, marked as away, and nobody can take it, because a
+match with nobody on one side is not a match. One challenge per person at a
+time, and a hundred on the board at most.
+
+Posters are recognised by the same browser-held id the ballots use, so a reload
+or a dropped socket reattaches the challenge (`challenge:reclaim`, sent on every
+connect) and cancels the timer. That id never appears on the board: it is a
+ballot id too, and publishing it would let anyone resume someone else's ballot.
+
+| Type | Data | Ack |
+| --- | --- | --- |
+| `challenge:post` | `{ motion, side, name, voterId }` | `{ ok, challenge }` |
+| `challenge:accept` | `{ challengeId, name, voterId }` | `{ ok, roomId }`, then `match:found` to both |
+| `challenge:withdraw` | `{ challengeId? }` | `{ ok }`, your own only |
+| `challenge:reclaim` | `{ voterId }` | `{ ok, challengeId }`, or `null` if none |
+
+Pushes: `lobby:challenges` (the whole board, on connect and on every change)
+and `match:found` `{ roomId, by, join }`. A challenge on the wire is `{ id,
+motion, side, name, createdAt, expiresAt, away }`.

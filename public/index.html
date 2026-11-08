@@ -375,6 +375,33 @@
   .pill.con { background: var(--con); color: var(--paper); }
   .pill.open { background: transparent; border: 2px solid var(--rule-hot); color: var(--dim); }
 
+  /* --------------------------------------------------- challenge board -- */
+  /* A posted stance waiting for someone to take the other side. Same plate as
+     a live room, with the poster's side as a spot-ink edge, because the side
+     is the whole offer. */
+  .challenge-row { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+  .challenge-row input { flex: 1; min-width: 220px; font-family: var(--display); font-size: 16px;
+    font-stretch: 87.5%; text-transform: uppercase; }
+  .side-pick { display: flex; gap: 6px; }
+  .side-pick button.stance { flex: none; padding: 9px 11px; font-size: 12px; }
+  .challenge-card { border-left-width: 6px; }
+  .challenge-card.pro { border-left-color: var(--pro); }
+  .challenge-card.con { border-left-color: var(--con); }
+  .challenge-card .t { font-size: 21px; margin-bottom: 9px; }
+  .challenge-card .wants { color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+  .challenge-card.away { opacity: .6; }
+  #challengeList { margin-bottom: 40px; }
+  /* The board's empty state is one line, not the floor's big dashed box: an
+     empty board is an invitation, not an absence. */
+  .board-empty {
+    font-family: var(--data);
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--dim);
+    padding: 4px 0 0;
+  }
+
   .empty {
     font-family: var(--display);
     font-size: 19px;
@@ -1034,6 +1061,17 @@
       <input id="topicInput" maxlength="140" placeholder="What are we arguing about?" autocomplete="off">
       <button class="primary" id="createBtn">Start it</button>
     </div>
+    <div class="section-label">Challenges</div>
+    <div class="challenge-row">
+      <input id="challengeInput" maxlength="140" placeholder="Throw down a motion…" autocomplete="off"
+             aria-label="Motion for your challenge">
+      <div class="side-pick" role="group" aria-label="The side you will argue">
+        <button class="stance pro" id="chPro" aria-pressed="true">I'm PRO</button>
+        <button class="stance con" id="chCon" aria-pressed="false">I'm CON</button>
+      </div>
+      <button id="challengeBtn">Post it</button>
+    </div>
+      <div id="challengeList"></div>
     <div class="section-label">On the floor now</div>
       <div id="roomList"></div>
     <div class="section-label" id="settledLabel" hidden>Settled</div>
@@ -1145,14 +1183,15 @@
 <!-- --------------------------------------------------------- name modal -->
 <div id="modal">
   <div class="modal-box">
-    <h3>Before you go in</h3>
-    <div class="note">
+    <h3 id="modalTitle">Before you go in</h3>
+    <div class="note" id="modalNote">
       Your name is public. We record where you stand now, before you read
       anything. It is the only way to tell later who changed your mind.
     </div>
-    <input id="nameInput" maxlength="24" placeholder="Your display name" autocomplete="off">
-    <div class="stance-label">Where do you stand right now?</div>
-    <div class="stance-row" role="group" aria-label="Your opening stance">
+    <input id="nameInput" maxlength="24" placeholder="Your display name" autocomplete="off"
+           aria-label="Your display name">
+    <div class="stance-label" id="stanceLabel">Where do you stand right now?</div>
+    <div class="stance-row" id="stanceRow" role="group" aria-label="Your opening stance">
       <button class="stance pro" id="stancePro" aria-pressed="false">Pro</button>
       <button class="stance und" id="stanceUnd" aria-pressed="true">Undecided</button>
       <button class="stance con" id="stanceCon" aria-pressed="false">Con</button>
@@ -1375,6 +1414,111 @@
     });
   }
 
+  // ------------------------------------------------------ challenge board --
+  // A stance sits here until somebody takes the other side, and then the
+  // server seats both of them in a fresh room and pushes `match:found`.
+
+  var challenges = [];
+  var myChallengeId = null;
+  var challengeSide = 'pro';
+
+  socket.on('lobby:challenges', function (list) {
+    challenges = list || [];
+    if (myChallengeId && !challenges.some(function (c) { return c.id === myChallengeId; })) {
+      myChallengeId = null;
+    }
+    renderChallenges();
+  });
+
+  function setChallengeSide(side) {
+    challengeSide = side;
+    $('chPro').setAttribute('aria-pressed', side === 'pro' ? 'true' : 'false');
+    $('chCon').setAttribute('aria-pressed', side === 'con' ? 'true' : 'false');
+  }
+  $('chPro').onclick = function () { setChallengeSide('pro'); };
+  $('chCon').onclick = function () { setChallengeSide('con'); };
+
+  function renderChallenges() {
+    var el = $('challengeList');
+    el.innerHTML = '';
+    if (!challenges.length) {
+      el.innerHTML = '<div class="board-empty">Nobody has thrown down yet. Post a motion, ' +
+        'pick your side, and wait for someone to take the other.</div>';
+      return;
+    }
+    challenges.forEach(function (c) {
+      var side = c.side === 'con' ? 'con' : 'pro';
+      var other = side === 'pro' ? 'con' : 'pro';
+      var mine = c.id === myChallengeId;
+      var card = document.createElement('div');
+      card.className = 'room-card challenge-card ' + side + (c.away ? ' away' : '');
+      card.innerHTML =
+        '<div class="info">' +
+          '<div class="t">' + esc(c.motion) + '</div>' +
+          '<div class="meta">' +
+            '<span class="pill ' + side + '">' + side.toUpperCase() + ' · ' + esc(c.name) + '</span>' +
+            '<span class="wants">' + (c.away ? 'stepped away' : 'wants a ' + other.toUpperCase()) + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<button></button>';
+      var btn = card.querySelector('button');
+      if (mine) {
+        btn.textContent = 'Withdraw';
+        btn.onclick = withdrawChallenge;
+      } else {
+        btn.className = 'primary';
+        btn.textContent = 'Take ' + other.toUpperCase();
+        btn.disabled = !!c.away;
+        btn.onclick = function () { acceptChallenge(c.id); };
+      }
+      el.appendChild(card);
+    });
+  }
+
+  function postChallenge() {
+    var motion = $('challengeInput').value.trim();
+    if (!motion) return toast('Give it a motion first.');
+    askNameThen(function () {
+      socket.emit('challenge:post', {
+        motion: motion, side: challengeSide, name: myName, voterId: voterId
+      }, function (res) {
+        if (res.error) return toast(res.error);
+        myChallengeId = res.challenge.id;
+        $('challengeInput').value = '';
+        renderChallenges();
+        toast('Posted. You will be pulled in the moment someone takes it.');
+      });
+    });
+  }
+  $('challengeBtn').onclick = postChallenge;
+  $('challengeInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') postChallenge();
+  });
+
+  function withdrawChallenge() {
+    socket.emit('challenge:withdraw', function (res) {
+      if (res.error) return toast(res.error);
+      myChallengeId = null;
+      renderChallenges();
+    });
+  }
+
+  function acceptChallenge(id) {
+    askNameThen(function () {
+      socket.emit('challenge:accept', { challengeId: id, name: myName, voterId: voterId }, function (res) {
+        if (res.error) return toast(res.error);
+        // The match:found push does the moving; the ack only reports.
+      });
+    });
+  }
+
+  // Both sides of an accepted challenge arrive here, already seated.
+  socket.on('match:found', function (d) {
+    if (!d || !d.join) return;
+    enterRoom(d.join);
+    toast('Matched with ' + d.by + '. You are ' + String(d.join.role).toUpperCase() + '.');
+  });
+
   $('createBtn').onclick = function () {
     var topic = $('topicInput').value.trim();
     if (!topic) return toast('Give it a topic first.');
@@ -1395,10 +1539,37 @@
   // only worth anything if it is taken before this particular argument is read.
   function askNameThenJoin(roomId) {
     pendingRoomId = roomId;
+    modalThen = null;
     setStance('undecided');
+    setModalMode(true);
     $('modal').classList.add('active');
     $('nameInput').value = myName;
     $('nameInput').focus();
+  }
+
+  // The board is used from the lobby and never asks for a stance: posting or
+  // taking a challenge IS picking a side, and whoever does it is seated, so
+  // they are off the panel anyway. It only needs a name, and only once.
+  var modalThen = null;
+  function askNameThen(then) {
+    if (myName) return then();
+    pendingRoomId = null;
+    modalThen = then;
+    setModalMode(false);
+    $('modal').classList.add('active');
+    $('nameInput').value = '';
+    $('nameInput').focus();
+  }
+
+  function setModalMode(withStance) {
+    $('modalTitle').textContent = withStance ? 'Before you go in' : 'Who is asking?';
+    $('modalNote').textContent = withStance
+      ? 'Your name is public. We record where you stand now, before you read ' +
+        'anything. It is the only way to tell later who changed your mind.'
+      : 'Your name is public, and it goes on the board next to your side.';
+    $('stanceLabel').hidden = !withStance;
+    $('stanceRow').hidden = !withStance;
+    $('modalJoin').textContent = withStance ? 'Get in' : 'Go';
   }
 
   function setStance(s) {
@@ -1418,6 +1589,7 @@
     myName = name;
     safeSet('debateName', name);
     $('modal').classList.remove('active');
+    if (modalThen) { var then = modalThen; modalThen = null; return then(); }
     if (pendingRoomId) joinRoom(pendingRoomId, myStance);
   };
   $('nameInput').addEventListener('keydown', function (e) {
@@ -1926,6 +2098,11 @@
   var wasDisconnected = false;
   socket.on('_disconnect', function () { wasDisconnected = true; });
   socket.on('_connect', function () {
+    // Every connection, first or not: a reload or a dropped socket would
+    // otherwise leave this browser's challenge orphaned and counting down.
+    socket.emit('challenge:reclaim', { voterId: voterId }, function (res) {
+      if (res && res.challengeId) { myChallengeId = res.challengeId; renderChallenges(); }
+    });
     if (wasDisconnected && currentRoom) {
       var roomId = currentRoom.id;
       // The server has no memory of us; rejoin from scratch as audience.
