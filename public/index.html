@@ -726,6 +726,47 @@
     border-bottom: 1px solid var(--rule);
   }
 
+  /* ------------------------------------------------------- questions -- */
+  /* The pinned question is a slip of paper stuck over the stage: paper on
+     ink, the one rotation, the one shadow. It is the floor speaking, so it
+     wears the overprint violet rather than either side's ink. */
+  .pinq {
+    flex-shrink: 0;
+    margin: 12px 22px 8px;
+    padding: 12px 16px;
+    background: var(--paper);
+    color: var(--ink);
+    box-shadow: var(--paste) var(--neon);
+    transform: rotate(var(--tilt));
+  }
+  .pinq .k, .pinq .ans {
+    font-family: var(--data);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--neon-deep);
+  }
+  .pinq .q { font-family: var(--read); font-size: 16px; line-height: 1.45; margin: 5px 0 6px; overflow-wrap: anywhere; }
+  .pinq .ans.pro { color: var(--pro); }
+  .pinq .ans.con { color: var(--con); }
+
+  .qpanel { flex-shrink: 0; border-bottom: 2px solid var(--rule); max-height: 45%; display: flex; flex-direction: column; }
+  .qhead {
+    display: flex; justify-content: space-between; padding: 10px 18px 6px;
+    font-family: var(--data); font-size: 10px; font-weight: 700; letter-spacing: .24em;
+    text-transform: uppercase; color: var(--neon);
+  }
+  .qhead .count { font-weight: 400; color: var(--dim); letter-spacing: .12em; }
+  .qlist { overflow-y: auto; min-height: 0; }
+  .qitem { display: flex; gap: 10px; align-items: flex-start; padding: 7px 18px; border-top: 1px solid var(--rule); }
+  .qitem .body { flex: 1; min-width: 0; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+  .qitem .body .n { font-family: var(--data); font-size: 11px; font-weight: 700; color: var(--neon); }
+  .qitem button.up { padding: 3px 7px; font-family: var(--data); font-size: 11px; min-width: 42px; }
+  .qitem button.up[aria-pressed="true"] { background: var(--neon-deep); border-color: var(--neon-deep); color: #fff; }
+  .qitem.pinned { background: var(--neon-soft); }
+  .qpanel .composer { padding: 10px 14px; }
+
   /* --------------------------------------------------------- the floor -- */
   /* Whose turn it is, and how much of it is left. The bar drains in the ink of
      whoever holds the floor, so the colour vanishing IS the time vanishing.
@@ -1114,6 +1155,13 @@
       <button class="lean con" id="leanCon" aria-pressed="false">Side with CON</button>
     </div>
 
+    <!-- The floor's question, pasted over the stage for the Questions round. -->
+    <div class="pinq" id="pinnedQ" hidden>
+      <div class="k">Question from the floor · <span id="pinnedWho"></span></div>
+      <div class="q" id="pinnedText"></div>
+      <div class="ans" id="pinnedAns"></div>
+    </div>
+
     <!-- The floor. A draining bar in the holder's own ink, so whose time is
          running out is the same fact as which colour is disappearing. -->
     <div class="floor" id="floorBar" hidden>
@@ -1172,9 +1220,20 @@
       <span>Audience</span>
       <span class="count" id="audCount">· 0 watching</span>
     </div>
+    <!-- Questions for both sides, open during the rebuttals. -->
+    <div class="qpanel" id="qPanel" hidden>
+      <div class="qhead"><span>Questions</span><span class="count" id="qState"></span></div>
+      <div class="qlist" id="qList"></div>
+      <div class="composer" id="qComposer" hidden>
+        <input id="qInput" maxlength="280" placeholder="Ask both sides one thing…" autocomplete="off"
+               aria-label="Your question for both debaters">
+        <button id="qSend">Ask</button>
+      </div>
+    </div>
     <div class="messages" id="audMsgs"></div>
     <div class="composer">
-      <input id="audInput" maxlength="1000" placeholder="Run your mouth…" autocomplete="off">
+      <input id="audInput" maxlength="1000" placeholder="Run your mouth…" autocomplete="off"
+             aria-label="Message the audience">
       <button id="audSend">Send</button>
     </div>
   </div>
@@ -1646,6 +1705,11 @@
     $('debateMsgs').scrollTop = $('debateMsgs').scrollHeight;
     $('audMsgs').scrollTop = $('audMsgs').scrollHeight;
 
+    questions = res.questions || [];
+    myQuestionId = res.myQuestionId || null;
+    myVotes = {};
+    (res.myVotes || []).forEach(function (id) { myVotes[id] = true; });
+
     // applyTurn calls renderRoom itself, so the composer is gated by the
     // floor on the very first paint rather than a frame later.
     applyTurn(res.turn);
@@ -1665,6 +1729,11 @@
     $('floorBar').hidden = true;
     $('startRow').hidden = true;
     $('resultCard').hidden = true;
+    $('pinnedQ').hidden = true;
+    $('qPanel').hidden = true;
+    questions = [];
+    myQuestionId = null;
+    myVotes = {};
     $('room').classList.remove('active');
     $('lobby').hidden = false;
     $('leaveBtn').hidden = true;
@@ -1747,6 +1816,95 @@
     $('leanCon').hidden = seated || concluded;
     renderLean();
     renderFloor();
+    renderQuestions();
+  }
+
+  // ------------------------------------------------------------ questions --
+  // Asked and voted on during the rebuttals; the top one is pinned to the
+  // stage when the Questions round opens and both sides answer it.
+
+  var questions = [];
+  var myQuestionId = null;
+  var myVotes = {};
+
+  socket.on('room:questions', function (list) {
+    if (!currentRoom) return;
+    questions = list || [];
+    renderQuestions();
+  });
+
+  function renderQuestions() {
+    var asking = !!(turn.started && turn.asking) && !concluded;
+    var answering = !!(turn.started && turn.answering) && !concluded;
+    var audience = myRole === 'audience';
+    $('qPanel').hidden = concluded || !(asking || answering || (turn.started && questions.length));
+    $('qComposer').hidden = !asking || !audience || !!myQuestionId;
+    $('qState').textContent = asking
+      ? (audience ? (myQuestionId ? 'yours is in · vote' : 'ask one · vote') : 'the floor is asking')
+      : answering ? 'voting closed' : 'closed';
+
+    var el = $('qList');
+    el.innerHTML = '';
+    if (!questions.length) {
+      var none = document.createElement('div');
+      none.className = 'qitem';
+      none.innerHTML = '<div class="body">' +
+        (asking ? 'No questions yet. The top-voted one goes to both sides.' : 'Nobody asked.') + '</div>';
+      el.appendChild(none);
+      return;
+    }
+    questions.forEach(function (q) {
+      var row = document.createElement('div');
+      row.className = 'qitem' + (q.pinned ? ' pinned' : '');
+      var mine = q.id === myQuestionId;
+      var voted = !!myVotes[q.id];
+      row.innerHTML =
+        '<button class="up" aria-pressed="' + (voted ? 'true' : 'false') + '"></button>' +
+        '<div class="body"><span class="n">' + esc(q.name) + ':</span> ' + esc(q.text) + '</div>';
+      var up = row.querySelector('button');
+      up.textContent = '▲ ' + (q.votes | 0);
+      up.setAttribute('aria-label', (q.votes | 0) + ' votes. Vote for this question');
+      up.disabled = !asking || !audience || mine || voted;
+      up.onclick = function () {
+        socket.emit('audience:upvote', { questionId: q.id }, function (res) {
+          if (res.error) return toast(res.error);
+          myVotes[q.id] = true;
+          renderQuestions();
+        });
+      };
+      el.appendChild(row);
+    });
+  }
+
+  function sendQuestion() {
+    var text = $('qInput').value.trim();
+    if (!text) return;
+    socket.emit('audience:question', { text: text }, function (res) {
+      if (res.error) return toast(res.error);
+      myQuestionId = res.questionId;
+      $('qInput').value = '';
+      renderQuestions();
+    });
+  }
+  $('qSend').onclick = sendQuestion;
+  $('qInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') sendQuestion();
+  });
+
+  // The pin. One question for the whole round, each side answering in turn.
+  function renderPin() {
+    var show = !concluded && turn.started && turn.answering;
+    $('pinnedQ').hidden = !show;
+    if (!show) return;
+    var q = turn.question;
+    $('pinnedWho').textContent = q ? q.name : 'nobody asked';
+    $('pinnedText').textContent = q ? q.text : 'The floor asked nothing. Use the time to press your case.';
+    var ans = $('pinnedAns');
+    ans.className = 'ans ' + (turn.paused ? '' : turn.side);
+    ans.textContent = turn.paused
+      ? 'Clock stopped'
+      : (turn.side === myRole ? 'You answer' : turn.side.toUpperCase() + ' answers') +
+        (turn.side === 'pro' ? ', then CON' : '');
   }
 
   // -------------------------------------------------------------- verdict --
@@ -1871,6 +2029,7 @@
     // Only the two debaters are offered the start button. The audience seeing a
     // control it cannot use reads as broken rather than as not-for-you.
     $('startRow').hidden = concluded || turn.started || turn.over || !seated || !bothSeated;
+    renderPin();
 
     if (!turn.started || concluded) {
       bar.hidden = true;

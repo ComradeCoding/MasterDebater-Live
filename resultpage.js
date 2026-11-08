@@ -67,6 +67,22 @@ function transcript(messages, startedAt) {
   }).join('') + '</div>';
 }
 
+// The floor's questions, as ranked when voting closed, with the one the
+// debaters answered marked. Records written before the round existed have no
+// questions field and render nothing here.
+function floorQuestions(questions) {
+  if (!questions || !questions.length) return '';
+  return '<div class="section-label">Questions from the floor</div><ol class="questions">' +
+    questions.map((q) => {
+      const votes = q.votes | 0;
+      return `<li class="${q.pinned ? 'pinned' : ''}">` +
+        `<span class="v">${votes} ${votes === 1 ? 'vote' : 'votes'}</span>` +
+        `<span class="q">${esc(q.text)}</span>` +
+        `<span class="who">${esc(q.name)}${q.pinned ? ' · put to both sides' : ''}</span>` +
+      '</li>';
+    }).join('') + '</ol>';
+}
+
 function floorChat(messages) {
   if (!messages.length) return '';
   return '<div class="section-label">From the floor</div><div class="floor">' +
@@ -255,6 +271,27 @@ function render(record, origin) {
   }
   .arg.con .from { color: var(--con); }
 
+  .questions { list-style: none; border-top: 1px solid var(--rule); }
+  .questions li {
+    display: grid; grid-template-columns: 74px 1fr; column-gap: 14px;
+    padding: 10px 2px; border-bottom: 1px solid var(--rule);
+  }
+  .questions .v {
+    grid-row: span 2; font-family: var(--data); font-size: 10px; font-weight: 700;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--dim); padding-top: 3px;
+  }
+  .questions .q { font-family: var(--read); font-size: 15px; overflow-wrap: anywhere; }
+  .questions .who {
+    margin-top: 4px; font-family: var(--data); font-size: 10px; font-weight: 700;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--neon);
+  }
+  /* The one that was put to the debaters, pasted on like the stage pin. */
+  .questions li.pinned {
+    background: var(--paper); color: var(--ink); padding: 12px 14px; margin: 8px 0;
+    border: 0; box-shadow: var(--paste) var(--neon); transform: rotate(var(--tilt));
+  }
+  .questions li.pinned .v, .questions li.pinned .who { color: var(--neon-deep); }
+
   .floor { border-top: 1px solid var(--rule); }
   .floor .line {
     font-size: 13.5px; padding: 7px 2px; border-bottom: 1px solid var(--rule);
@@ -333,6 +370,7 @@ function render(record, origin) {
 
   <div class="section-label">The argument</div>
   ${transcript(record.debateMessages || [], record.createdAt)}
+  ${floorQuestions(record.questions)}
   ${floorChat(record.audienceMessages || [])}
 
   <footer>

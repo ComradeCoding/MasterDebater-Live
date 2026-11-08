@@ -217,13 +217,52 @@ the floor is enforced.
 
 ```
 Opening    PRO 3:00   CON 3:00
-Rebuttal   PRO 2:00   CON 2:00
+Rebuttal   PRO 2:00   CON 2:00    the floor asks and votes
+Questions  PRO 2:00   CON 2:00    both answer the top question
 Closing    PRO 1:30   CON 1:30
 ```
 
 PRO speaks first in every round. The side proposing the motion carries the
 burden of proof, so it leads and CON always answers, which also means the last
 word in each round belongs to CON.
+
+The table in `format.js` is pure data, and the turn list, the turn count and
+the total running time all derive from it. Adding a round was one line plus a
+flag; nothing in the clock code knows how many rounds there are.
+
+### The floor's questions
+
+Until the Questions round, the audience could watch, chat and vote with its
+feet, but never put anything to the people on stage. Now it gets one round.
+
+While the rebuttals run, each audience member can ask one question and vote
+for any number of others. The rebuttals are the right window: the floor has
+heard both cases by then and can see the holes in them. When the Questions
+round opens, voting closes and the top question is pinned to the stage, pasted
+over it on a slip of paper above the floor bar. PRO answers first, as always,
+then CON answers the same question, so the two answers can be compared
+directly. Ties go to whoever asked first. If nobody asked, the stage says so and
+the round is open time.
+
+The pin is chosen once, when the round opens, and it does not move. Voting is
+closed by then on purpose; otherwise a question could be swapped out from under
+PRO halfway through answering it.
+
+Debaters cannot ask or vote, for the same reason they cannot pad the gauge. A
+vote is a count on the wire, never a list of who voted, and the asker's ballot
+id never leaves the server. Questions are part of the record, ranked as they
+stood when voting closed, and the permalink lists them under the transcript with
+the one put to both sides marked.
+
+| Type | Data | Ack |
+| --- | --- | --- |
+| `audience:question` | `{ text }` | `{ ok, questionId }`, audience only, during the rebuttals, one each |
+| `audience:upvote` | `{ questionId }` | `{ ok, votes }`, audience only, during the rebuttals, not your own |
+
+Pushes: `room:questions` (the ranked list, `{ id, name, text, votes, pinned }`).
+`debate:turn` gains `asking`, `answering` and, during the Questions round, the
+pinned `question`. The join payload carries `questions`, plus `myQuestionId` and
+`myVotes` so a reconnect does not offer a second question or a second vote.
 
 **A turn is a window, not a single message.** You hold the floor for a stretch
 and can post as many times as you like inside it, then yield or let the clock
@@ -597,8 +636,8 @@ is a name and a boolean, and the runner is forty lines at the top of the file.
 Node 22 ships a global `WebSocket` client, so the tests speak to the server
 through the same API a browser uses.
 
-177 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so a six-turn
-format runs in six seconds rather than thirteen minutes.
+196 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so an eight-turn
+format runs in eight seconds rather than seventeen minutes.
 
 The first 40 cover the live room: lobby push on connect, topic
 validation, room creation, joining a missing room, everyone starting as
@@ -628,7 +667,7 @@ else a link, returns the same room when asked twice, and opens live.
 
 The next 23 cover the format: a room starting with no format running, the
 audience being unable to call it to order, the guard on an unfilled seat, the
-stage staying open during warm-up, PRO opening, the six-turn schedule, refusing
+stage staying open during warm-up, PRO opening, the eight-turn schedule, refusing
 to start twice, the floor blocking the side that does not hold it, a turn
 allowing more than one message, yielding a floor you do not hold, yielding
 handing over and locking the yielder out, the clock advancing a turn with nobody
@@ -636,6 +675,14 @@ acting, an emptied seat stopping the clock and freezing both sides out, a
 refilled seat resuming the same turn rather than restarting it, and the last
 turn settling the debate on its own with a normal record and a working
 permalink.
+
+The next 19 cover the floor's questions: none before the rebuttals, none from
+the stage, one each, no voting for your own and no double vote, the list pushed
+ranked and without ballot ids, the Questions round following the rebuttals
+with PRO first and the top question pinned, asking and voting closing as it
+opens, a late arrival seeing the pin, CON answering the same question, the pin
+coming down for the closings, and the record and the permalink carrying the
+questions ranked, without ballot ids, under the transcript and escaped.
 
 The next 25 cover the challenge board: it is pushed on connect, a challenge
 needs a motion and a side, it goes up on every board without the poster's
@@ -697,7 +744,7 @@ confirmed that entry stances survive a dropped connection.
    on the gauge.
 4. Tab 1 clicks "Start the debate". The floor bar opens on PRO with a running
    clock; tab 2's composer goes inert until the floor passes to it.
-5. Either debater clicks "Call it" twice to end early, or the six turns run out
+5. Either debater clicks "Call it" twice to end early, or the eight turns run out
    and the format settles it. All three see the verdict, the room freezes, and
    the debate appears under "settled" in the lobby with a permalink.
 

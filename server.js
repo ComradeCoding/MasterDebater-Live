@@ -372,6 +372,10 @@ const store = (() => {
         turn: { index: -1, endsAt: 0, remainingMs: 0, paused: false, pausedReason: null, over: false },
         turnTimer: null,
         reapTimer: null,
+        // The floor's questions, and the one pinned to the stage once the
+        // Questions round opens. Votes are keyed by ballot id, like ballots.
+        questions: [],
+        pinnedQuestionId: null,
       };
       rooms.set(id, room);
       return room;
@@ -412,6 +416,22 @@ const store = (() => {
       room.ballots.set(voterId, ballot);
       return ballot;
     },
+
+    // --- the floor's questions ------------------------------------------------
+    addQuestion(room, voterId, name, text) {
+      const q = { id: nextMessageId++, voterId, name, text, ts: Date.now(), votes: new Set() };
+      room.questions.push(q);
+      return q;
+    },
+    getQuestion(room, id) { return room.questions.find((q) => q.id === id) || null; },
+    questionBy(room, voterId) { return room.questions.find((q) => q.voterId === voterId) || null; },
+    // Most votes first; on a tie, whoever asked first. Asking early is the
+    // only advantage there is, and it is the honest one.
+    rankedQuestions(room) {
+      return [...room.questions].sort((a, b) => b.votes.size - a.votes.size || a.ts - b.ts);
+    },
+    upvote(room, q, voterId) { q.votes.add(voterId); },
+    pinQuestion(room, q) { room.pinnedQuestionId = q ? q.id : null; },
 
     getBallot(room, voterId) { return room.ballots.get(voterId) || null; },
     listBallots(room) { return [...room.ballots.values()]; },
@@ -609,6 +629,33 @@ function orphanChallenges(client) {
   if (changed) broadcastChallenges();
 }
 
+// ---------------------------------------------------------------------------
+// The floor's questions
+// ---------------------------------------------------------------------------
+
+const MAX_QUESTION_LEN = 280;
+const MAX_QUESTIONS = 200;
+
+// What the wire carries. Never the asker's ballot id, and never who voted:
+// a vote is a count, not a public record of who agreed with whom.
+function questionSummary(room, q) {
+  return { id: q.id, name: q.name, text: q.text, votes: q.votes.size, pinned: room.pinnedQuestionId === q.id };
+}
+const questionList = (room) => store.rankedQuestions(room).map((q) => questionSummary(room, q));
+
+function publishQuestions(room) {
+  broadcastRoom(room, 'room:questions', questionList(room));
+}
+
+// The clock state plus the pinned question, so a late arrival during the
+// Questions round sees what is being answered, not just whose turn it is.
+function turnPayload(room) {
+  const t = format.turnState(room);
+  const q = room.pinnedQuestionId != null ? store.getQuestion(room, room.pinnedQuestionId) : null;
+  t.question = t.answering && q ? questionSummary(room, q) : null;
+  return t;
+}
+
 // Everything a client needs to draw a room it has just entered. Shared by the
 // ordinary join and by the paths that land someone straight in a seat, so all
 // of them paint the same first frame.
@@ -627,7 +674,15 @@ function joinPayload(room, client, ballot) {
     myEntry: ballot ? ballot.entry : null,
     // Late arrivals and reconnects need the clock, not just the history. The
     // remaining time is computed at send, so it is correct on arrival.
-    turn: format.turnState(room),
+    turn: turnPayload(room),
+    questions: questionList(room),
+    // Which of them are this browser's, so a reconnect does not offer to ask
+    // a second question or vote twice. Ids only, never anyone else's.
+    myQuestionId: (() => {
+      const q = client.voterId ? store.questionBy(room, client.voterId) : null;
+      return q ? q.id : null;
+    })(),
+    myVotes: room.questions.filter((q) => client.voterId && q.votes.has(client.voterId)).map((q) => q.id),
   };
 }
 
@@ -698,7 +753,7 @@ function armTurnTimer(room, ms) {
 }
 
 function publishTurn(room) {
-  broadcastRoom(room, 'debate:turn', format.turnState(room));
+  broadcastRoom(room, 'debate:turn', turnPayload(room));
 }
 
 function beginTurn(room, index) {
@@ -710,6 +765,21 @@ function beginTurn(room, index) {
   room.turn.pausedReason = null;
   room.turn.remainingMs = t.seconds * 1000;
   room.turn.endsAt = Date.now() + room.turn.remainingMs;
+
+  // The Questions round opening is when the floor's vote is counted. Pinned
+  // once, for the whole round, so both sides answer the same question and
+  // nobody can swap it out by voting while PRO is mid-answer.
+  if (t.answersQuestion && room.pinnedQuestionId == null) {
+    const top = store.rankedQuestions(room)[0] || null;
+    store.pinQuestion(room, top);
+    broadcastRoom(room, 'debate:system', {
+      text: top
+        ? `Question from the floor, ${top.name} asks: ${top.text}`
+        : 'Nobody from the floor asked a question',
+      ts: Date.now(),
+    });
+    publishQuestions(room);
+  }
 
   broadcastRoom(room, 'debate:system', {
     text: `${t.round}: ${t.side.toUpperCase()} has the floor`,
@@ -805,6 +875,12 @@ function settleRoom(room, systemText) {
     headline: verdictLine(verdict, room.seats.pro.name, room.seats.con.name),
     debateMessages: room.debateMessages,
     audienceMessages: room.audienceMessages,
+    // The floor's questions, ranked as they were when voting closed. Names and
+    // text only: who asked is public, the ballot id they asked under is not.
+    questions: store.rankedQuestions(room).map((q) => ({
+      name: q.name, text: q.text, votes: q.votes.size, ts: q.ts,
+      pinned: room.pinnedQuestionId === q.id,
+    })),
   };
 
   // Archive first: if the write fails, the room stays live and callable rather
@@ -1018,6 +1094,43 @@ const handlers = {
     return { ok: true };
   },
 
+  // One question per audience member, taken while the rebuttals run. That is
+  // when the floor has heard both cases and can see the holes in them.
+  'audience:question'(client, { text } = {}) {
+    const room = client.room;
+    if (!room) return { error: 'Join a debate first.' };
+    if (room.status === 'concluded') return { error: 'This debate is settled.' };
+    if (client.role !== 'audience') return { error: 'Questions come from the floor, not the stage.' };
+    const t = room.turn.index >= 0 ? format.turnAt(room.turn.index) : null;
+    if (!t || !t.audienceAsks) return { error: 'Questions are taken during the rebuttals.' };
+    if (store.questionBy(room, client.voterId)) return { error: 'You have already asked yours.' };
+    if (room.questions.length >= MAX_QUESTIONS) return { error: 'The floor has asked enough.' };
+    text = clean(text, MAX_QUESTION_LEN);
+    if (!text) return { error: 'Ask something first.' };
+
+    const q = store.addQuestion(room, client.voterId, client.name, text);
+    publishQuestions(room);
+    return { ok: true, questionId: q.id };
+  },
+
+  // A vote is a count. One per person per question, not your own, and only
+  // while questions are still being taken, so the pinned one is final.
+  'audience:upvote'(client, { questionId } = {}) {
+    const room = client.room;
+    if (!room) return { error: 'Join a debate first.' };
+    if (room.status === 'concluded') return { error: 'This debate is settled.' };
+    if (client.role !== 'audience') return { error: 'Votes come from the floor.' };
+    const t = room.turn.index >= 0 ? format.turnAt(room.turn.index) : null;
+    if (!t || !t.audienceAsks) return { error: 'Voting closed when the questions round opened.' };
+    const q = store.getQuestion(room, Number(questionId));
+    if (!q) return { error: 'No such question.' };
+    if (q.voterId === client.voterId) return { error: 'You cannot vote for your own question.' };
+    if (q.votes.has(client.voterId)) return { ok: true, votes: q.votes.size };
+    store.upvote(room, q, client.voterId);
+    publishQuestions(room);
+    return { ok: true, votes: q.votes.size };
+  },
+
   // Neutral is the starting position, not a destination: this only accepts a
   // side, so there is no wire format for going back.
   'audience:lean'(client, { side } = {}) {
@@ -1083,7 +1196,7 @@ const handlers = {
       ts: Date.now(),
     });
     beginTurn(room, 0);
-    return { ok: true, turn: format.turnState(room) };
+    return { ok: true, turn: turnPayload(room) };
   },
 
   // Yielding early. The clock would take the floor anyway, so this only ever

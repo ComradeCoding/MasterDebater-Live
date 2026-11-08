@@ -500,8 +500,8 @@ async function runVerdict() {
 // ==========================================================================
 // The format: turns, the clock, and the floor
 // ==========================================================================
-// The server is spawned with DEBATE_TURN_SECONDS=1, so a full six-turn format
-// runs in six seconds instead of thirteen minutes.
+// The server is spawned with DEBATE_TURN_SECONDS=1, so a full eight-turn format
+// runs in eight seconds instead of seventeen minutes.
 
 async function runFormat() {
   const pro = makeClient('fpro');
@@ -535,7 +535,9 @@ async function runFormat() {
   check('a seated debater can start it', !started.error, JSON.stringify(started));
   check('PRO opens', started.turn && started.turn.side === 'pro' && started.turn.round === 'Opening',
     JSON.stringify(started.turn));
-  check('the format is six turns', started.turn && started.turn.total === 6,
+  // Derived from the table in format.js: two turns a round, four rounds.
+  check('the format is eight turns, two for each round in the table',
+    started.turn && started.turn.total === 8 && started.turn.total === 2 * require('./format').ROUNDS.length,
     String(started.turn && started.turn.total));
   const twice = await pro.emit('debate:start');
   check('it cannot be started twice', !!twice.error);
@@ -594,7 +596,7 @@ async function runFormat() {
   });
   // Drive the remaining turns by yielding, posting on each side as it comes up
   // so the transcript stays two-sided and the auto-settle guard is satisfied.
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 8; i++) {
     const t = watcher.got('debate:turn').slice(-1)[0];
     if (!t || !t.started) break;
     const who = t.side === 'pro' ? pro : con;
@@ -614,6 +616,127 @@ async function runFormat() {
     String(page.status));
 
   [pro, con, watcher].forEach((c) => c.close());
+  await wait(150);
+
+  await runQuestions();
+}
+
+// ==========================================================================
+// The floor's questions
+// ==========================================================================
+// Turns are one second each here, so every step inside a round is a single
+// quick round trip and the turns are handed over by yielding, never by waiting
+// for the clock.
+
+async function runQuestions() {
+  const pro = makeClient('qpro');
+  const con = makeClient('qcon');
+  const a1 = makeClient('qa1');
+  const a2 = makeClient('qa2');
+  const a3 = makeClient('qa3');
+  await Promise.all([pro.open, con.open, a1.open, a2.open, a3.open]);
+
+  const { roomId } = await pro.emit('room:create', { topic: 'Cities should ban cars' });
+  await pro.emit('room:join', { roomId, name: 'Pia', stance: 'pro', voterId: 'q-pro' });
+  await con.emit('room:join', { roomId, name: 'Cyril', stance: 'con', voterId: 'q-con' });
+  await a1.emit('room:join', { roomId, name: 'Asha', stance: 'undecided', voterId: 'q-1' });
+  await a2.emit('room:join', { roomId, name: 'Bram', stance: 'undecided', voterId: 'q-2' });
+  await a3.emit('room:join', { roomId, name: 'Cleo', stance: 'undecided', voterId: 'q-3' });
+  await pro.emit('seat:claim', { side: 'pro' });
+  await con.emit('seat:claim', { side: 'con' });
+
+  const early = await a1.emit('audience:question', { text: 'Too soon?' });
+  check('no questions before the rebuttals', !!early.error, JSON.stringify(early));
+
+  // Opening, both sides, handed over by yielding.
+  await pro.emit('debate:start');
+  await pro.emit('debate:message', { text: 'Streets are for people.' });
+  await pro.emit('debate:pass');
+  await con.emit('debate:message', { text: 'Streets are for deliveries too.' });
+  await con.emit('debate:pass');
+
+  // Rebuttal, PRO: the floor asks and votes now.
+  const fromStage = await pro.emit('audience:question', { text: 'Can I ask myself?' });
+  const q1 = await a1.emit('audience:question', { text: 'Who pays for the buses?' });
+  const q2 = await a2.emit('audience:question', { text: '<img src=x onerror=alert(1)>' });
+  const second = await a1.emit('audience:question', { text: 'And another thing' });
+  const ownVote = await a1.emit('audience:upvote', { questionId: q1.questionId });
+  await a2.emit('audience:upvote', { questionId: q1.questionId });
+  await a3.emit('audience:upvote', { questionId: q1.questionId });
+  await a1.emit('audience:upvote', { questionId: q2.questionId });
+  const doubled = await a2.emit('audience:upvote', { questionId: q1.questionId });
+
+  check('the stage cannot ask the floor\'s questions', !!fromStage.error, JSON.stringify(fromStage));
+  check('the audience can ask during the rebuttals', q1.ok && q2.ok, JSON.stringify([q1, q2]));
+  check('one question per audience member', !!second.error, JSON.stringify(second));
+  check('nobody can vote for their own question', !!ownVote.error, JSON.stringify(ownVote));
+  check('a second vote on the same question does not count twice', doubled.votes === 2,
+    JSON.stringify(doubled));
+
+  await wait(60);
+  const ranked = a3.got('room:questions').slice(-1)[0] || [];
+  check('questions are pushed ranked by votes',
+    ranked.length === 2 && ranked[0].id === q1.questionId && ranked[0].votes === 2 && ranked[1].votes === 1,
+    JSON.stringify(ranked));
+  check('the question list never names who voted or their ballot id',
+    !/q-[123]/.test(JSON.stringify(ranked)), JSON.stringify(ranked));
+
+  await pro.emit('debate:message', { text: 'Buses pay for themselves in cleared lanes.' });
+  await pro.emit('debate:pass');
+  await con.emit('debate:message', { text: 'Not in a town of nine thousand.' });
+  await con.emit('debate:pass');
+  await wait(60);
+
+  // Questions, PRO answers first.
+  const qTurn = a1.got('debate:turn').slice(-1)[0];
+  check('a Questions round follows the rebuttals, PRO first',
+    qTurn && qTurn.round === 'Questions' && qTurn.side === 'pro' && qTurn.answering === true,
+    JSON.stringify(qTurn));
+  check('the top-voted question is pinned for the side answering',
+    qTurn && qTurn.question && qTurn.question.text === 'Who pays for the buses?' && qTurn.question.pinned,
+    JSON.stringify(qTurn && qTurn.question));
+  const lateVote = await a3.emit('audience:upvote', { questionId: q2.questionId });
+  check('voting closes when the questions round opens', !!lateVote.error, JSON.stringify(lateVote));
+  const lateAsk = await a3.emit('audience:question', { text: 'Am I too late?' });
+  check('asking closes when the questions round opens', !!lateAsk.error);
+
+  const latecomer = makeClient('qlate');
+  await latecomer.open;
+  const lj = await latecomer.emit('room:join', { roomId, name: 'Dov', stance: 'pro', voterId: 'q-late' });
+  check('a late arrival sees the pinned question',
+    lj.turn && lj.turn.question && lj.turn.question.id === q1.questionId && lj.questions.length === 2,
+    JSON.stringify(lj.turn && lj.turn.question));
+
+  await pro.emit('debate:message', { text: 'The drivers who no longer need the lanes.' });
+  await pro.emit('debate:pass');
+  await wait(60);
+  const conTurn = a1.got('debate:turn').slice(-1)[0];
+  check('CON answers the same question',
+    conTurn && conTurn.side === 'con' && conTurn.question && conTurn.question.id === q1.questionId,
+    JSON.stringify(conTurn));
+  await con.emit('debate:message', { text: 'The same drivers, twice.' });
+  await con.emit('debate:pass');
+  await wait(60);
+  const closing = a1.got('debate:turn').slice(-1)[0];
+  check('the pin comes down for the closings',
+    closing && closing.round === 'Closing' && closing.question === null, JSON.stringify(closing));
+
+  // Settle and read the record.
+  const done = await con.emit('debate:conclude');
+  const rq = done.result && done.result.questions;
+  check('the questions live in the record',
+    Array.isArray(rq) && rq.length === 2 && rq[0].text === 'Who pays for the buses?' &&
+    rq[0].votes === 2 && rq[0].pinned === true && rq[1].pinned === false,
+    JSON.stringify(rq));
+  check('the record keeps no ballot ids for questions', !/q-[123]/.test(JSON.stringify(rq)));
+  const page = await fetchText(`/d/${roomId}`);
+  check('the permalink renders the questions under the transcript',
+    page.body.includes('Questions from the floor') && page.body.includes('Who pays for the buses?') &&
+    page.body.indexOf('Questions from the floor') > page.body.indexOf('Not in a town of nine thousand.'));
+  check('a question is escaped on the permalink', !page.body.includes('<img src=x'),
+    'raw markup reached the page');
+
+  [pro, con, a1, a2, a3, latecomer].forEach((c) => c.close());
   await wait(150);
 
   await runChallenges();

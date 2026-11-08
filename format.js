@@ -18,13 +18,22 @@
 // PRO speaks first in every round. The side proposing the motion carries the
 // burden of proof, so it leads and CON always answers, which is also why the
 // last word in each round belongs to CON.
+//
+// Two flags hand part of the debate to the audience. While a round marked
+// `audienceAsks` runs, the floor can put questions and vote on them; when a
+// round marked `answersQuestion` opens, the top-voted one is pinned to the
+// stage and each side answers it in turn. The rebuttals are when the audience
+// has heard both cases and the gaps in them, so that is when questions are
+// worth asking, and answering them before closing means the closings have to
+// account for the answers.
 const ROUNDS = [
   { name: 'Opening', seconds: 180 },
-  { name: 'Rebuttal', seconds: 120 },
+  { name: 'Rebuttal', seconds: 120, audienceAsks: true },
+  { name: 'Questions', seconds: 120, answersQuestion: true },
   { name: 'Closing', seconds: 90 },
 ];
 
-// Test seam. Six turns at real length is thirteen minutes, which no test suite
+// Test seam. Eight turns at real length is seventeen minutes, which no test suite
 // should sit through, so the whole schedule can be collapsed to a few seconds.
 const OVERRIDE = Number(process.env.DEBATE_TURN_SECONDS) || 0;
 
@@ -32,7 +41,13 @@ function buildTurns() {
   const turns = [];
   for (const round of ROUNDS) {
     for (const side of ['pro', 'con']) {
-      turns.push({ round: round.name, side, seconds: OVERRIDE || round.seconds });
+      turns.push({
+        round: round.name,
+        side,
+        seconds: OVERRIDE || round.seconds,
+        audienceAsks: !!round.audienceAsks,
+        answersQuestion: !!round.answersQuestion,
+      });
     }
   }
   return turns;
@@ -68,6 +83,8 @@ function turnState(room, now = Date.now()) {
       : Math.max(0, room.turn.endsAt - now),
     paused: room.turn.paused,
     pausedReason: room.turn.pausedReason || null,
+    asking: t.audienceAsks,
+    answering: t.answersQuestion,
   };
 }
 
