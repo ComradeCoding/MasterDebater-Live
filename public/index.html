@@ -1010,6 +1010,21 @@
     line-height: 1;
   }
   .modal-box .note { font-family: var(--read); font-size: 13.5px; color: var(--muted); }
+  .modal-box .note.small { font-size: 12px; margin-top: -6px; color: var(--dim); }
+  #handleInput { font-family: var(--data); font-size: 13px; text-transform: lowercase; }
+
+  /* A seated debater's handle, under their name, linking to their record. */
+  .seat a.handle {
+    display: block;
+    margin-top: 2px;
+    font-family: var(--data);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    color: var(--muted);
+    text-decoration: none;
+  }
+  .seat a.handle:hover { color: var(--paper); text-decoration: underline; }
 
   /* The baseline reading. Undecided is pre-selected and is a real answer here,
      not a way to skip the question. It is the position most people arrive in,
@@ -1141,6 +1156,7 @@
         <div>
           <div class="label">PRO</div>
           <div class="who open" id="proWho">Open seat</div>
+          <a class="handle" id="proHandle" hidden></a>
         </div>
         <button id="proBtn">Take side</button>
       </div>
@@ -1148,6 +1164,7 @@
         <div>
           <div class="label">CON</div>
           <div class="who open" id="conWho">Open seat</div>
+          <a class="handle" id="conHandle" hidden></a>
         </div>
         <button id="conBtn">Take side</button>
       </div>
@@ -1261,6 +1278,12 @@
     </div>
     <input id="nameInput" maxlength="24" placeholder="Your display name" autocomplete="off"
            aria-label="Your display name">
+    <input id="handleInput" maxlength="20" placeholder="Debater handle, optional" autocomplete="off"
+           aria-label="Debater handle, optional" aria-describedby="handleNote" spellcheck="false">
+    <div class="note small" id="handleNote">
+      Argue under a handle and your record collects at /u/handle. It lives in
+      this browser: clear its storage and the handle is gone for good.
+    </div>
     <div class="stance-label" id="stanceLabel">Where do you stand right now?</div>
     <div class="stance-row" id="stanceRow" role="group" aria-label="Your opening stance">
       <button class="stance pro" id="stancePro" aria-pressed="false">Pro</button>
@@ -1369,6 +1392,32 @@
     }
     return id;
   })();
+
+  // A handle is held by this browser and nothing else: 32 random bytes kept in
+  // storage and sent with every claim. The server binds the handle to a hash
+  // of them the first time and refuses any other key after. Lose the storage
+  // and the handle goes with it, which is the honest cost of not having
+  // accounts. If storage is blocked the key lasts as long as the page.
+  var myHandle = safeGet('debateHandle') || '';
+  var handleKey = (function () {
+    var k = safeGet('debateHandleKey');
+    if (k && /^[0-9a-f]{64}$/.test(k)) return k;
+    var bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    k = Array.prototype.map.call(bytes, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+    safeSet('debateHandleKey', k);
+    return k;
+  })();
+  function handleFields(data) {
+    if (myHandle) { data.handle = myHandle; data.secret = handleKey; }
+    return data;
+  }
+  function handleError(res) {
+    if (res.error === 'handle taken') {
+      return toast('@' + myHandle + ' belongs to another browser. Change it in the join box.');
+    }
+    toast(res.error);
+  }
 
   // Every piece of user text goes through this before it reaches innerHTML.
   function esc(s) {
@@ -1551,10 +1600,10 @@
     var motion = $('challengeInput').value.trim();
     if (!motion) return toast('Give it a motion first.');
     askNameThen(function () {
-      socket.emit('challenge:post', {
+      socket.emit('challenge:post', handleFields({
         motion: motion, side: challengeSide, name: myName, voterId: voterId
-      }, function (res) {
-        if (res.error) return toast(res.error);
+      }), function (res) {
+        if (res.error) return handleError(res);
         myChallengeId = res.challenge.id;
         $('challengeInput').value = '';
         renderChallenges();
@@ -1577,8 +1626,10 @@
 
   function acceptChallenge(id) {
     askNameThen(function () {
-      socket.emit('challenge:accept', { challengeId: id, name: myName, voterId: voterId }, function (res) {
-        if (res.error) return toast(res.error);
+      socket.emit('challenge:accept', handleFields({
+        challengeId: id, name: myName, voterId: voterId
+      }), function (res) {
+        if (res.error) return handleError(res);
         // The match:found push does the moving; the ack only reports.
       });
     });
@@ -1616,6 +1667,7 @@
     setModalMode(true);
     $('modal').classList.add('active');
     $('nameInput').value = myName;
+    $('handleInput').value = myHandle;
     $('nameInput').focus();
   }
 
@@ -1630,6 +1682,7 @@
     setModalMode(false);
     $('modal').classList.add('active');
     $('nameInput').value = '';
+    $('handleInput').value = myHandle;
     $('nameInput').focus();
   }
 
@@ -1658,8 +1711,14 @@
   $('modalJoin').onclick = function () {
     var name = $('nameInput').value.trim();
     if (!name) return toast('Need a name first.');
+    var handle = $('handleInput').value.trim().replace(/^@/, '').toLowerCase();
+    if (handle && !/^[a-z0-9][a-z0-9_-]{1,19}$/.test(handle)) {
+      return toast('A handle is 2 to 20 letters, digits, dashes or underscores.');
+    }
     myName = name;
     safeSet('debateName', name);
+    myHandle = handle;
+    safeSet('debateHandle', handle);
     $('modal').classList.remove('active');
     if (modalThen) { var then = modalThen; modalThen = null; return then(); }
     if (pendingRoomId) joinRoom(pendingRoomId, myStance);
@@ -1776,6 +1835,17 @@
     $('proWho').className = 'who' + (r.proTaken ? '' : ' open');
     $('conWho').textContent = r.conTaken ? r.conName : 'Open seat';
     $('conWho').className = 'who' + (r.conTaken ? '' : ' open');
+    ['pro', 'con'].forEach(function (side) {
+      var h = r[side + 'Taken'] ? r[side + 'Handle'] : null;
+      var a = $(side + 'Handle');
+      a.hidden = !h;
+      if (h) {
+        a.textContent = '@' + h;
+        a.href = '/u/' + encodeURIComponent(h);
+        a.target = '_blank';
+        a.rel = 'noopener';
+      }
+    });
     $('audCount').textContent = '· ' + r.audienceCount + ' watching';
 
     ['pro', 'con'].forEach(function (side) {
@@ -1992,8 +2062,8 @@
         renderRoom();
       });
     } else {
-      socket.emit('seat:claim', { side: side }, function (res) {
-        if (res.error) return toast(res.error);
+      socket.emit('seat:claim', handleFields({ side: side }), function (res) {
+        if (res.error) return handleError(res);
         myRole = res.role;
         renderRoom();
       });

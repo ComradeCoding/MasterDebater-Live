@@ -792,6 +792,96 @@ async function runArchive() {
   const app = await fetchText('/');
   check('the lobby links to the archive', app.body.includes('href="/archive"'));
 
+  await runHandles();
+}
+
+// ==========================================================================
+// Handles
+// ==========================================================================
+
+async function runHandles() {
+  const KEY_N = 'a1'.repeat(32);   // Nadia's browser
+  const KEY_X = 'b2'.repeat(32);   // somebody else's
+  const KEY_R = 'c3'.repeat(32);   // Roman's browser
+  const nad = makeClient('hnad');
+  const rom = makeClient('hrom');
+  const imp = makeClient('himp');
+  const vot = makeClient('hvot');
+  await Promise.all([nad.open, rom.open, imp.open, vot.open]);
+
+  const { roomId } = await nad.emit('room:create', { topic: 'Remote work beats the office' });
+  await nad.emit('room:join', { roomId, name: 'Nadia', stance: 'pro', voterId: 'h-nad' });
+  await rom.emit('room:join', { roomId, name: 'Roman', stance: 'con', voterId: 'h-rom' });
+  await imp.emit('room:join', { roomId, name: 'Nadia', stance: 'con', voterId: 'h-imp' });
+  await vot.emit('room:join', { roomId, name: 'Vee', stance: 'undecided', voterId: 'h-vot' });
+
+  const badShape = await nad.emit('seat:claim', { side: 'pro', handle: 'n', secret: KEY_N });
+  check('a handle has a shape', !!badShape.error, JSON.stringify(badShape));
+  const noKey = await nad.emit('seat:claim', { side: 'pro', handle: 'nadia_k', secret: 'short' });
+  check('a handle needs a full browser key', !!noKey.error, JSON.stringify(noKey));
+
+  const first = await nad.emit('seat:claim', { side: 'pro', handle: 'Nadia_K', secret: KEY_N });
+  check('the first claim of a handle binds it', first.ok && first.handle === 'nadia_k',
+    JSON.stringify(first));
+  await wait(60);
+  const st = vot.got('room:state').slice(-1)[0];
+  check('the handle is stored on the seat', st && st.proHandle === 'nadia_k', JSON.stringify(st));
+  check('the browser key never reaches anyone else', !JSON.stringify(vot.received).includes(KEY_N));
+
+  const stolen = await imp.emit('seat:claim', { side: 'con', handle: 'nadia_k', secret: KEY_X });
+  check('a different key gets "handle taken"', stolen.error === 'handle taken', JSON.stringify(stolen));
+  await wait(60);
+  check('a refused handle claim does not take the seat',
+    vot.got('room:state').slice(-1)[0].conTaken === false);
+
+  await rom.emit('seat:claim', { side: 'con', handle: 'roman-o', secret: KEY_R });
+  await nad.emit('debate:message', { text: 'Nobody misses the commute.' });
+  await rom.emit('debate:message', { text: 'Everybody misses the corridor conversation.' });
+  await vot.emit('audience:lean', { side: 'con' });
+  const done = await rom.emit('debate:conclude');
+  check('the handles are in the record',
+    done.result && done.result.pro.handle === 'nadia_k' && done.result.con.handle === 'roman-o',
+    JSON.stringify(done.result && [done.result.pro, done.result.con]));
+  check('the record carries no key', !JSON.stringify(done.result).includes(KEY_N));
+
+  // The same browser, a new connection, a new room: the key still opens it.
+  const nad2 = makeClient('hnad2');
+  await nad2.open;
+  const { roomId: r2 } = await nad2.emit('room:create', { topic: 'Second outing' });
+  await nad2.emit('room:join', { roomId: r2, name: 'Nadia', stance: 'pro', voterId: 'h-nad' });
+  const again = await nad2.emit('seat:claim', { side: 'pro', handle: 'nadia_k', secret: KEY_N });
+  check('the same key claims the handle again from anywhere', again.ok && again.handle === 'nadia_k',
+    JSON.stringify(again));
+  await nad2.emit('seat:release');
+
+  // Anonymous seats still work: a handle is optional.
+  const anon = await nad2.emit('seat:claim', { side: 'con' });
+  check('a seat can still be taken with no handle', anon.ok && anon.handle === null,
+    JSON.stringify(anon));
+
+  // --- the debater's page -------------------------------------------------
+  const lost = await fetchText('/u/nadia_k');
+  check('a debater\'s page lists what they argued', lost.status === 200 &&
+    lost.body.includes('Remote work beats the office'), String(lost.status));
+  check('it shows side, swing and result from their side',
+    /lost<\/span> as <span class="pro">PRO/.test(lost.body) && lost.body.includes('>-1<'),
+    lost.body.slice(lost.body.indexOf('<div class="list">'), lost.body.indexOf('<div class="list">') + 400));
+  check('it keeps a running total', lost.body.includes('running -1') && /Net moved/.test(lost.body));
+  const won = await fetchText('/u/roman-o');
+  check('the other side of the same debate reads as a win',
+    /won<\/span> as <span class="con">CON/.test(won.body) && won.body.includes('>+1<'));
+  check('a debater\'s page runs no script', /script-src 'none'/.test(lost.csp || ''), lost.csp);
+  check('nobody under an unclaimed handle is a 404', (await fetchText('/u/nobody-here')).status === 404);
+  check('a traversal attempt in a handle is a 404',
+    (await fetchText('/u/..%2F..%2Fserver.js')).status === 404);
+  check('the key never appears on the page', !lost.body.includes(KEY_N));
+  const perma = await fetchText(`/d/${roomId}`);
+  check('the permalink links each handle to its page',
+    perma.body.includes('href="/u/nadia_k"') && perma.body.includes('href="/u/roman-o"'));
+
+  [nad, rom, imp, vot, nad2].forEach((c) => c.close());
+  await wait(150);
+
   await runChallenges();
 }
 

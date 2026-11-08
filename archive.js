@@ -27,6 +27,20 @@ const ID_RE = /^[0-9a-f]{6}$/;
 const MAX_INDEX = 200;
 
 let index = []; // newest first; lobby-sized summaries only
+// Every record a handle argued, uncapped and oldest first. A debater's page
+// that quietly dropped their early debates would be a worse lie than the
+// lobby forgetting them, so this one indexes the whole archive.
+const byHandle = new Map();
+
+function indexHandles(summary) {
+  for (const h of [summary.proHandle, summary.conHandle]) {
+    if (!h) continue;
+    const list = byHandle.get(h) || [];
+    if (!list.some((r) => r.id === summary.id)) list.push(summary);
+    list.sort((a, b) => a.concludedAt - b.concludedAt);
+    byHandle.set(h, list);
+  }
+}
 
 const isValidId = (id) => typeof id === 'string' && ID_RE.test(id);
 const fileFor = (id) => path.join(DIR, `${id}.json`);
@@ -45,6 +59,8 @@ function summarize(record) {
     crossed: (record.verdict.moved && record.verdict.moved.crossed) | 0,
     proName: record.pro.name,
     conName: record.con.name,
+    proHandle: record.pro.handle || null,
+    conHandle: record.con.handle || null,
   };
 }
 
@@ -57,7 +73,9 @@ function save(record) {
   fs.writeFileSync(tmp, JSON.stringify(record));
   fs.renameSync(tmp, fileFor(record.id));
 
-  index = [summarize(record), ...index.filter((r) => r.id !== record.id)];
+  const summary = summarize(record);
+  index = [summary, ...index.filter((r) => r.id !== record.id)];
+  indexHandles(summary);
   if (index.length > MAX_INDEX) index.length = MAX_INDEX;
   return record;
 }
@@ -75,6 +93,10 @@ function list(limit = 50) {
   return index.slice(0, limit);
 }
 
+function forHandle(handle) {
+  return (byHandle.get(handle) || []).slice();
+}
+
 // Rebuild the lobby index at boot. A corrupt file is skipped, never fatal:
 // one bad record must not stop the server from starting.
 function boot() {
@@ -83,15 +105,19 @@ function boot() {
     names = fs.readdirSync(DIR);
   } catch {
     index = [];
+    byHandle.clear();
     return 0; // no archive yet
   }
 
   const found = [];
+  byHandle.clear();
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
     const record = load(name.slice(0, -5));
     if (record && record.id && record.verdict && record.pro && record.con) {
-      found.push(summarize(record));
+      const summary = summarize(record);
+      found.push(summary);
+      indexHandles(summary);
     }
   }
   found.sort((a, b) => b.concludedAt - a.concludedAt);
@@ -99,4 +125,4 @@ function boot() {
   return index.length;
 }
 
-module.exports = { DIR, MAX_INDEX, isValidId, save, load, list, boot };
+module.exports = { DIR, MAX_INDEX, isValidId, save, load, list, forHandle, boot };

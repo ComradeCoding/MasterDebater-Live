@@ -44,7 +44,7 @@ debate-live/
   archive.js          # concluded debates on disk
   resultpage.js       # the permalink page, server-rendered
   card.js             # the permalink's share card, drawn as a PNG
-  archivepage.js      # /archive, every settled debate, server-rendered
+  archivepage.js      # /archive and /u/<handle>, server-rendered
   public/index.html   # the entire frontend, markup, CSS and JS
   homesite/           # the ComradeCoding homepage, served on its own hosts
   tools/              # image codecs and utilities, mostly run by hand
@@ -120,7 +120,7 @@ Client to server: `{ id?, type, data }`. When `id` is present the server replies
 | `room:create` | `{ topic }` | `{ roomId }` |
 | `room:join` | `{ roomId, name, stance, voterId }` | `{ ok, room, role, debateMessages, audienceMessages, lean, myLean, myEntry, turn }` |
 | `room:leave` | none | `{ ok }` |
-| `seat:claim` | `{ side: 'pro' \| 'con' }` | `{ ok, role }` |
+| `seat:claim` | `{ side: 'pro' \| 'con', handle?, secret? }` | `{ ok, role, handle }` |
 | `seat:release` | none | `{ ok, role: 'audience' }` |
 | `debate:message` | `{ text }` | `{ ok }`, seated debaters only |
 | `audience:message` | `{ text }` | `{ ok }`, anyone in the room |
@@ -530,6 +530,46 @@ therefore being scaled up rather than down. Neither has anything left to give
 without visibly losing frames or colour, and the tests hold the icons to a byte
 budget so a full-size file dropped back in fails loudly.
 
+## Handles
+
+Not accounts. A display name is whatever you typed into the join box this
+time, so a debater's history was scattered across every name they ever used.
+A handle is a name a record collects under.
+
+The browser makes 32 random bytes the first time it loads the page and keeps
+them in `localStorage`. A seat claim, a challenge post or a challenge accept can
+carry a handle and those bytes. The first claim of a handle binds it to a
+SHA-256 of the bytes; the bytes themselves are never stored. Any later claim
+with different bytes gets `{ error: 'handle taken' }`, and the comparison is
+constant time. The handle is checked last, after every other reason the claim
+could fail, so a seat claim that was going to be refused anyway cannot burn
+somebody's handle on its way out. A handle is optional, and a seat can still be
+taken without one.
+
+The handle is stored on the seat, shown under the name in the seat bar, written
+into the record, and linked from the permalink. A rematch keeps it, and a
+challenge remembers it for when the poster's match comes, even if they have
+reloaded since posting.
+
+`/u/<handle>` lists every debate that handle argued, newest first, with the
+side, the swing from their side of it (swing is stored from PRO's point of
+view, so it is flipped for CON), and won, lost or drew. Each row carries the
+running total as it stood after that debate, and the top of the page carries
+the career: net people moved, settled, won, lost, drawn. It draws from an index
+of the whole archive rather than the 200 the lobby holds, because a debater's
+page that quietly dropped their early debates would be a worse lie than the
+lobby forgetting them. Same rules as the other record pages: the handle is
+matched against its exact shape before anything is looked up, nothing runs, and
+a handle nobody has claimed or argued under is a 404.
+
+**Losing storage loses the handle.** Clear the site's data, switch browsers or
+open a private window, and that browser has no key, so the handle is gone for
+good; there is no recovery, because there is nothing to recover it with. This
+is deliberately the smallest honest step toward the accounts that the known
+limits keep deferring: it gives a debater continuity without collecting an
+email address or a password, and it is the piece an account system would sit
+on top of, since an account is a handle with a better way to prove you hold it.
+
 ## The archive
 
 The lobby shows the fifty most recent results, which is a feed, not a record.
@@ -669,7 +709,7 @@ is a name and a boolean, and the runner is forty lines at the top of the file.
 Node 22 ships a global `WebSocket` client, so the tests speak to the server
 through the same API a browser uses.
 
-211 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so an eight-turn
+231 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so an eight-turn
 format runs in eight seconds rather than seventeen minutes.
 
 The first 40 cover the live room: lobby push on connect, topic
@@ -723,6 +763,16 @@ contest, falls back on an unknown sort, finds a motion by every word and a
 name in any case, combines search with sort, says when nothing matches,
 escapes the terms it echoes, keeps search results out of the index, is in the
 sitemap, and is linked from the lobby.
+
+The next 20 cover handles: a handle has a shape and needs a full key, the
+first claim binds it and stores it on the seat, the key never reaches anyone
+else, a different key gets exactly "handle taken" without taking the seat, the
+handles go into the record without the key, the same key claims it again from
+a new connection, a seat still works with no handle, and the debater's page:
+what they argued, side and swing and result from their side, a running total,
+the other side of the same debate reading as a win, no script, 404s for an
+unclaimed handle and a traversal attempt, no key on the page, and the
+permalink linking each handle.
 
 The next 25 cover the challenge board: it is pushed on connect, a challenge
 needs a motion and a side, it goes up on every board without the poster's
@@ -793,6 +843,9 @@ as separate ballots, since one browser profile is deliberately one voter.
 
 ## Known limits
 
+- **Handles are only as durable as browser storage.** See Handles: a cleared
+  profile loses its handle permanently. That is the price of not having
+  accounts, and handles are the first step toward them, not a substitute.
 - **Ballot stuffing.** `voterId` is client-supplied. Clearing storage or opening
   a private window buys another ballot. This is the honest cost of having no
   accounts, and the fix is accounts, not a cleverer id.

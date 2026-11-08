@@ -40,6 +40,10 @@ function elapsed(ts, from) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+// A debater who argued under a handle links to their record. Records from
+// before handles existed have none and render the bare name.
+const handleLink = (h) => (h ? ` <a class="h" href="/u/${esc(h)}">@${esc(h)}</a>` : '');
+
 function bar(t, panel) {
   if (!panel) return '<div class="bar"><span class="seg und" style="width:100%"></span></div>';
   const pct = (n) => (n / panel) * 100 + '%';
@@ -178,6 +182,8 @@ function render(record, origin) {
   .pill.pro { background: var(--pro); color: var(--paper); }
   .pill.con { background: var(--con); color: var(--paper); }
   .pill.when { border: 2px solid var(--rule-hot); color: var(--dim); }
+  .pill a.h { color: var(--paper); text-decoration: underline; text-underline-offset: 2px; }
+  .pill a.h:hover { background: var(--paper); color: var(--ink); text-decoration: none; }
 
   /* ------------------------------------------------------- THE VERDICT -- */
   /* The one loud element on the page. Everything below it is quiet. */
@@ -337,8 +343,8 @@ function render(record, origin) {
 <div class="wrap">
   <h1 class="motion">${esc(record.topic)}</h1>
   <div class="card-meta">
-    <span class="pill pro">PRO · ${esc(proName)}</span>
-    <span class="pill con">CON · ${esc(conName)}</span>
+    <span class="pill pro">PRO · ${esc(proName)}${handleLink(record.pro.handle)}</span>
+    <span class="pill con">CON · ${esc(conName)}${handleLink(record.con.handle)}</span>
     <span class="pill when">${esc(stamp(record.concludedAt))}</span>
   </div>
 

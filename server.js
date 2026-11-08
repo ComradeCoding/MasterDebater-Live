@@ -292,17 +292,29 @@ const store = (() => {
 
   const newRoomId = () => crypto.randomBytes(3).toString('hex');
 
+  const handles = new Map(); // handle -> { handle, secretHash, createdAt }
+
   return {
+    // --- handles --------------------------------------------------------------
+    // A handle is bound to the hash of a browser-held secret the first time it
+    // is claimed. The secret itself is never stored.
+    getHandle(handle) { return handles.get(handle) || null; },
+    bindHandle(handle, secretHash) {
+      const h = { handle, secretHash, createdAt: Date.now() };
+      handles.set(handle, h);
+      return h;
+    },
+
     // --- the challenge board ------------------------------------------------
     // `key` is the poster's browser-held id, which is how a reload finds its
     // own challenge again. It never leaves the server: it is also the ballot
     // id, and a ballot id is not something to publish.
-    postChallenge({ motion, side, name, key, poster }) {
+    postChallenge({ motion, side, name, key, poster, handle = null }) {
       let id;
       do { id = crypto.randomBytes(4).toString('hex'); } while (challenges.has(id));
       const now = Date.now();
       const ch = {
-        id, motion, side, name, key, poster,
+        id, motion, side, name, key, poster, handle,
         createdAt: now,
         expiresAt: now + CHALLENGE_TTL,
         expiryTimer: null,
@@ -393,7 +405,7 @@ const store = (() => {
     removeMember(room, client) { room.members.delete(client); },
 
     takeSeat(room, side, client) {
-      room.seats[side] = { clientId: client.id, name: client.name };
+      room.seats[side] = { clientId: client.id, name: client.name, handle: client.handle || null };
     },
 
     freeSeat(room, side) { room.seats[side] = null; },
@@ -480,6 +492,8 @@ function roomSummary(room) {
     conTaken: !!room.seats.con,
     proName: room.seats.pro ? room.seats.pro.name : null,
     conName: room.seats.con ? room.seats.con.name : null,
+    proHandle: room.seats.pro ? room.seats.pro.handle : null,
+    conHandle: room.seats.con ? room.seats.con.handle : null,
     audienceCount,
   };
 }
@@ -613,6 +627,47 @@ function identify(client, name, voterId) {
   const v = clean(voterId, MAX_VOTER_ID_LEN);
   if (v && !client.voterId) client.voterId = v;
   if (!client.voterId) client.voterId = `anon-${client.id}`;
+}
+
+// ---------------------------------------------------------------------------
+// Handles
+// ---------------------------------------------------------------------------
+// Not accounts. A handle is a name a debater's record collects under, held by
+// whichever browser first claimed it: that browser generates 32 random bytes,
+// keeps them in localStorage, and sends them with every claim. The first claim
+// binds the handle to a hash of that secret; any later claim with a different
+// secret is refused. Losing the storage loses the handle.
+
+const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,19}$/;
+const SECRET_RE = /^[0-9a-f]{64}$/;
+const hashSecret = (secret) => crypto.createHash('sha256').update(secret).digest();
+
+// Returns { handle } (null for an anonymous claim) or { error }. Binding is a
+// side effect, so callers run every other check first: a seat claim that was
+// going to fail anyway must not burn somebody's handle on the way.
+function claimHandle(handle, secret) {
+  if (handle == null || handle === '') return { handle: null };
+  const h = String(handle).trim().toLowerCase();
+  if (!HANDLE_RE.test(h)) {
+    return { error: 'A handle is 2 to 20 letters, digits, dashes or underscores.' };
+  }
+  if (typeof secret !== 'string' || !SECRET_RE.test(secret)) {
+    return { error: 'This browser has no key for a handle.' };
+  }
+  const hash = hashSecret(secret);
+  const existing = store.getHandle(h);
+  if (!existing) {
+    store.bindHandle(h, hash);
+    return { handle: h };
+  }
+  const known = Buffer.isBuffer(existing.secretHash)
+    ? existing.secretHash
+    : Buffer.from(existing.secretHash, 'hex');
+  // Constant time, so the comparison cannot be timed byte by byte.
+  if (known.length !== hash.length || !crypto.timingSafeEqual(known, hash)) {
+    return { error: 'handle taken' };
+  }
+  return { handle: h };
 }
 
 const isSeatedLive = (c) =>
@@ -867,8 +922,8 @@ function settleRoom(room, systemText) {
     topic: room.topic,
     createdAt: room.createdAt,
     concludedAt: Date.now(),
-    pro: { name: room.seats.pro.name },
-    con: { name: room.seats.con.name },
+    pro: { name: room.seats.pro.name, handle: room.seats.pro.handle || null },
+    con: { name: room.seats.con.name, handle: room.seats.con.handle || null },
     verdict,
     // Written into the record rather than derived twice. The live result card
     // and the permalink must never describe the same debate differently, and
@@ -1007,13 +1062,17 @@ const handlers = {
     return { ok: true };
   },
 
-  'seat:claim'(client, { side } = {}) {
+  'seat:claim'(client, { side, handle, secret } = {}) {
     const room = client.room;
     if (!room) return { error: 'Join a debate first.' };
     if (room.status === 'concluded') return { error: 'This debate is settled.' };
     if (side !== 'pro' && side !== 'con') return { error: 'Pick PRO or CON.' };
     if (client.role !== 'audience') return { error: 'You are already seated.' };
     if (room.seats[side]) return { error: 'Someone beat you to it.' };
+    // Last, because a claim that binds a handle should be a claim that lands.
+    const claimed = claimHandle(handle, secret);
+    if (claimed.error) return { error: claimed.error };
+    client.handle = claimed.handle;
 
     store.takeSeat(room, side, client);
     client.role = side;
@@ -1032,7 +1091,7 @@ const handlers = {
       ts: Date.now(),
     });
     publishRoom(room);
-    return { ok: true, role: side };
+    return { ok: true, role: side, handle: client.handle };
   },
 
   'seat:release'(client) {
@@ -1227,7 +1286,7 @@ const handlers = {
   // queue would read as broken. A posted stance just sits here until somebody
   // wants the other side of it.
 
-  'challenge:post'(client, { motion, side, name, voterId } = {}) {
+  'challenge:post'(client, { motion, side, name, voterId, handle, secret } = {}) {
     motion = clean(motion, MAX_TOPIC_LEN);
     if (!motion) return { error: 'Give it a motion first.' };
     if (side !== 'pro' && side !== 'con') return { error: 'Pick PRO or CON.' };
@@ -1238,7 +1297,13 @@ const handlers = {
     if (store.listChallenges().length >= MAX_CHALLENGES) {
       return { error: 'The board is full. Take one of the challenges on it.' };
     }
-    const ch = store.postChallenge({ motion, side, name: client.name, key: client.voterId, poster: client });
+    // The match seats them, so the handle is claimed now, the same as a seat.
+    const claimed = claimHandle(handle, secret);
+    if (claimed.error) return { error: claimed.error };
+    client.handle = claimed.handle;
+    const ch = store.postChallenge({
+      motion, side, name: client.name, key: client.voterId, poster: client, handle: client.handle,
+    });
     store.armChallengeExpiry(ch, broadcastChallenges);
     broadcastChallenges();
     return { ok: true, challenge: challengeSummary(ch) };
@@ -1270,7 +1335,7 @@ const handlers = {
     return { ok: true, challengeId: ch.id };
   },
 
-  'challenge:accept'(client, { challengeId, name, voterId } = {}) {
+  'challenge:accept'(client, { challengeId, name, voterId, handle, secret } = {}) {
     const ch = typeof challengeId === 'string' ? store.getChallenge(challengeId) : null;
     if (!ch) return { error: 'That challenge has already been taken or withdrawn.' };
     identify(client, name, voterId);
@@ -1286,8 +1351,13 @@ const handlers = {
     if (store.listRooms().length >= MAX_ROOMS) {
       return { error: 'Too many live debates right now. Try again soon.' };
     }
+    const claimed = claimHandle(handle, secret);
+    if (claimed.error) return { error: claimed.error };
+    client.handle = claimed.handle;
 
     store.removeChallenge(ch);
+    // The poster may be on a newer connection than the one that posted.
+    poster.handle = ch.handle || null;
     const room = store.createRoom(ch.motion);
     room.fromChallenge = ch.id;
     const otherSide = ch.side === 'pro' ? 'con' : 'pro';
@@ -1482,6 +1552,24 @@ const server = http.createServer((req, res) => {
       ...securityHeaders("'none'", "'self'"),
       'Content-Type': 'text/html; charset=utf-8',
     });
+    return res.end(req.method === 'HEAD' ? undefined : body);
+  }
+
+  // --- a debater's page ------------------------------------------------------
+  // The handle is matched against its exact shape before anything is looked
+  // up, the same defence the permalink uses for its id. A handle nobody has
+  // claimed and nobody has argued under is "no such debater".
+  if (urlPath.startsWith('/u/')) {
+    const handle = urlPath.slice(3).replace(/\/$/, '');
+    const list = HANDLE_RE.test(handle) ? archive.forHandle(handle) : [];
+    if (!HANDLE_RE.test(handle) || (!list.length && !store.getHandle(handle))) {
+      res.writeHead(404, { ...securityHeaders("'none'"), 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end('<!DOCTYPE html><meta charset="utf-8"><title>No such debater</title>' +
+        '<body style="background:#0a0b10;color:#f4f1e9;font:16px system-ui;padding:60px">' +
+        'Nobody debates under that handle. <a style="color:#b96bff" href="/archive">See the archive</a>.');
+    }
+    const body = archivepage.renderHandle(handle, list, { origin: canonicalOrigin(req) });
+    res.writeHead(200, { ...securityHeaders("'none'"), 'Content-Type': 'text/html; charset=utf-8' });
     return res.end(req.method === 'HEAD' ? undefined : body);
   }
 
