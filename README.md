@@ -621,7 +621,9 @@ itself: it serves the record, states the verdict, carries the transcript, runs n
 script, 404s on an unknown id, rejects a traversal attempt in the id, and renders
 stored markup inert. Its share card serves as a real 1200x630 PNG under the same
 policy, 404s on an unknown id or a traversal attempt, and is named by the page's
-`og:image` and large Twitter card tags.
+`og:image` and large Twitter card tags. A rematch refuses the audience, seats the
+caller on the other side, pushes the other debater onto theirs, hands everyone
+else a link, returns the same room when asked twice, and opens live.
 
 The next 23 cover the format: a room starting with no format running, the
 audience being unable to call it to order, the guard on an unfilled seat, the
