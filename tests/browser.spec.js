@@ -237,3 +237,183 @@ test('a challenge posted in one tab and taken in another seats both', async ({ b
   }
   for (const p of [poster, taker]) await p.ctx.close();
 });
+
+// ---------------------------------------------------------------------------
+// A phone, 390 pixels wide
+// ---------------------------------------------------------------------------
+// The body clips horizontal overflow, so "does the page scroll sideways" would
+// pass even with a button half off the screen. Each control is measured
+// instead: fully inside the viewport, and actually usable.
+
+async function onScreen(page, selector) {
+  await expect(page.locator(selector)).toBeVisible();
+  const box = await page.locator(selector).boundingBox();
+  const vp = page.viewportSize();
+  expect(box, `${selector} has a box`).not.toBeNull();
+  expect(box.x, `${selector} left edge`).toBeGreaterThanOrEqual(0);
+  expect(box.y, `${selector} top edge`).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width, `${selector} right edge`).toBeLessThanOrEqual(vp.width + 0.5);
+  expect(box.y + box.height, `${selector} bottom edge`).toBeLessThanOrEqual(vp.height + 0.5);
+}
+
+test('a phone at 390 pixels can debate, watch and read the result', async ({ browser }) => {
+  const topic = `Phones should be enough ${Date.now() % 100000}`;
+  const phone = await person(browser, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const desk = await person(browser);
+  const p = phone.page;
+
+  await p.locator('#topicInput').fill(topic);
+  await p.locator('#createBtn').click();
+  await onScreen(p, '#modalJoin');
+  await fillModal(p, 'Alessandra Featherstone', 'pro');
+  for (const sel of ['#leaveBtn', '#soundBtn', '#headerCount', '#tabStage', '#tabSide', '#proBtn', '#conBtn']) {
+    await onScreen(p, sel);
+  }
+  await p.locator('#proBtn').click();
+  for (const sel of ['#debateInput', '#debateSend', '#callIt', '#gauge']) await onScreen(p, sel);
+  await p.locator('#debateInput').fill('Typed on a phone.');
+  await p.locator('#debateSend').click();
+  await expect(bubble(p, 'Typed on a phone.')).toBeVisible();
+
+  await joinFromLobby(desk.page, topic, 'Desk', 'con');
+  await desk.page.locator('#conBtn').click();
+  await desk.page.locator('#debateInput').fill('Typed on a desk.');
+  await desk.page.locator('#debateInput').press('Enter');
+
+  await onScreen(p, '#startBtn');
+  await p.locator('#startBtn').click();
+  for (const sel of ['#floorBar', '#floorClock', '#yieldBtn']) await onScreen(p, sel);
+  await p.locator('#yieldBtn').click();
+  await expect(desk.page.locator('#floorHolder')).toHaveText('You have the floor');
+
+  // The audience panel is a tab away on a phone, and works when opened.
+  await p.locator('#tabSide').click();
+  await expect(p.locator('#audInput')).toBeVisible();
+  await onScreen(p, '#audInput');
+  await onScreen(p, '#audSend');
+  await p.locator('#audInput').fill('Sidebar from a phone.');
+  await p.locator('#audSend').click();
+  await expect(desk.page.locator('#audMsgs .chatline', { hasText: 'Sidebar from a phone.' })).toBeVisible();
+  await p.locator('#tabStage').click();
+
+  await p.locator('#callIt').click();
+  await p.locator('#callIt').click();
+  await expect(p.locator('#resultCard')).toBeVisible();
+  for (const sel of ['#resultSwing', '#resultLine', '#resultOpen', '#resultCopy', '#resultRematch']) {
+    await onScreen(p, sel);
+  }
+
+  for (const x of [phone, desk]) await x.ctx.close();
+});
+
+// ---------------------------------------------------------------------------
+// The keyboard alone
+// ---------------------------------------------------------------------------
+
+async function tabTo(page, selector, limit = 60) {
+  for (let i = 0; i < limit; i++) {
+    if (await page.evaluate((sel) => document.activeElement && document.activeElement.matches(sel), selector)) {
+      return;
+    }
+    await page.keyboard.press('Tab');
+  }
+  throw new Error(`could not reach ${selector} with Tab`);
+}
+
+test('join, claim, post, yield and call it with the keyboard alone', async ({ browser }) => {
+  const topic = `Keyboards are enough ${Date.now() % 100000}`;
+  const kb = await person(browser);
+  const other = await person(browser);
+  const watcher = await person(browser);
+  const k = kb.page;
+
+  await tabTo(k, '#topicInput');
+  await k.keyboard.type(topic);
+  await k.keyboard.press('Enter');
+  // The modal takes focus, and Enter in the name box joins.
+  await expect(k.locator('#nameInput')).toBeFocused();
+  await k.keyboard.type('Kay');
+  await k.keyboard.press('Enter');
+  await expect(k.locator('#room')).toHaveClass(/active/);
+
+  // A visible ring on whatever has focus, in the flyer's own dashed cut line.
+  await tabTo(k, '#proBtn');
+  const ring = await k.evaluate(() => getComputedStyle(document.activeElement).outlineStyle);
+  expect(ring).toBe('dashed');
+  await k.keyboard.press('Enter');
+  // Sitting down puts the cursor where the speaking happens.
+  await expect(k.locator('#debateInput')).toBeFocused();
+  await k.keyboard.type('Every word of this was typed.');
+  await k.keyboard.press('Enter');
+  await expect(bubble(k, 'Every word of this was typed.')).toBeVisible();
+
+  await joinFromLobby(other.page, topic, 'Mouse', 'con');
+  await other.page.locator('#conBtn').click();
+  await other.page.locator('#debateInput').fill('I used a mouse.');
+  await other.page.locator('#debateInput').press('Enter');
+
+  // Escape closes the join modal and gives focus back to what opened it.
+  const join = watcher.page.locator('#roomList .room-card', { hasText: topic }).getByRole('button', { name: 'Join' });
+  await join.focus();
+  await watcher.page.keyboard.press('Enter');
+  await expect(watcher.page.locator('#modal')).toHaveClass(/active/);
+  await watcher.page.keyboard.press('Escape');
+  await expect(watcher.page.locator('#modal')).not.toHaveClass(/active/);
+  await expect(join).toBeFocused();
+  await watcher.page.keyboard.press('Enter');
+  await watcher.page.keyboard.type('Watcher');
+  await watcher.page.keyboard.press('Enter');
+  await expect(k.locator('#headerCount')).toHaveText('1 watching');
+
+  await tabTo(k, '#startBtn');
+  await k.keyboard.press('Enter');
+  // Turn changes are read out: assertively to the debater whose turn it is.
+  await expect(k.locator('#announcer')).toHaveText('Opening. You have the floor.');
+  await expect(watcher.page.locator('#announcer')).toHaveText('Opening. PRO has the floor.');
+  await tabTo(k, '#debateInput');
+  await k.keyboard.type('On the clock, by keyboard.');
+  await k.keyboard.press('Enter');
+  await expect(bubble(other.page, 'On the clock, by keyboard.')).toBeVisible();
+  await tabTo(k, '#yieldBtn');
+  await k.keyboard.press('Enter');
+  await expect(other.page.locator('#announcer')).toHaveText('Opening. You have the floor.');
+
+  // The stage and the sidebar are logs a screen reader follows.
+  await expect(k.locator('#debateMsgs')).toHaveAttribute('role', 'log');
+  await expect(k.locator('#audMsgs')).toHaveAttribute('role', 'log');
+
+  await tabTo(k, '#callIt');
+  await k.keyboard.press('Enter');
+  await expect(k.locator('#callIt')).toHaveText('Sure? End it');
+  await k.keyboard.press('Enter');
+  await expect(k.locator('#resultCard')).toBeVisible();
+  await expect(watcher.page.locator('#resultCard')).toBeVisible();
+
+  // The count in the header is live: the watcher leaving takes it down.
+  await watcher.ctx.close();
+  await expect(k.locator('#headerCount')).toHaveText('0 watching');
+
+  for (const x of [kb, other]) await x.ctx.close();
+});
+
+test('the sound toggle is remembered and the tone needs no file', async ({ browser }) => {
+  const a = await person(browser);
+  const topic = `Quiet please ${Date.now() % 100000}`;
+  await a.page.locator('#topicInput').fill(topic);
+  await a.page.locator('#createBtn').click();
+  await fillModal(a.page, 'Hush', 'pro');
+  await expect(a.page.locator('#soundBtn')).toHaveAttribute('aria-pressed', 'true');
+  await a.page.locator('#soundBtn').click();
+  await expect(a.page.locator('#soundBtn')).toHaveAttribute('aria-pressed', 'false');
+  expect(await a.page.evaluate(() => localStorage.getItem('debateSound'))).toBe('off');
+  await a.page.reload();
+  await a.page.locator('#roomList .room-card', { hasText: topic }).getByRole('button', { name: 'Join' }).click();
+  await fillModal(a.page, 'Hush', 'pro');
+  await expect(a.page.locator('#soundBtn')).toHaveAttribute('aria-pressed', 'false');
+  // The tone is synthesized, so the page makes no media request for one.
+  const media = [];
+  a.page.on('request', (req) => { if (/\.(mp3|wav|ogg|m4a)$/i.test(req.url())) media.push(req.url()); });
+  await a.page.locator('#soundBtn').click();
+  expect(media).toEqual([]);
+  await a.ctx.close();
+});

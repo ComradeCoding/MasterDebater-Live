@@ -112,9 +112,9 @@ for (const [ch, rows] of Object.entries(GLYPHS)) {
 // Anything the font does not have is folded to something it does, so a name
 // with an accent or a curly quote still reads rather than turning to noise.
 const FOLD = {
-  '‘': "'", '’': "'", '“': '"', '”': '"', '`': "'", '^': "'",
-  '–': '-', '—': '-', '~': '-', '[': '(', ']': ')', '{': '(', '}': ')',
-  '\\': '/', '|': '/', '…': '...',
+  '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"', '`': "'", '^': "'",
+  '\u2013': '-', '\u2014': '-', '~': '-', '[': '(', ']': ')', '{': '(', '}': ')',
+  '\\': '/', '|': '/', '\u2026': '...',
 };
 function foldText(s) {
   const out = [];

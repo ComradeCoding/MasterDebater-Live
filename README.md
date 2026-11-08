@@ -762,9 +762,73 @@ prototype:
   inline `height: 15px !important` could not shrink it.
 - **Scroll.** New messages only auto-scroll when the reader is already within
   80px of the bottom, so scrolling back through history is not hijacked.
-- **`localStorage`.** Name, voter id and stance handling are all wrapped in
-  try/catch. Sandboxed embeds that block storage degrade to asking for a name
-  each session and to a per-connection ballot.
+- **`localStorage`.** Name, voter id, handle and handle key, and the sound
+  setting are all read and written through try/catch. Sandboxed embeds that
+  block storage degrade to asking for a name each session, a per-connection
+  ballot, a handle key that lasts as long as the page, and sound on.
+
+## Your turn
+
+The floor passing to you is the one moment the page has to reach you even when
+you are reading something in another tab. Three things happen, and only to the
+debater whose turn it now is: the title flashes "Your floor" until the page is
+looked at, a short tone plays, and a screen reader hears it through an
+assertive live region. Everyone else hears whose turn it is through the same
+region, with no tone and no flash.
+
+The tone is two square-wave notes a fourth apart, falling, synthesized with Web
+Audio, so there is no file to fetch and nothing for the policy to allow.
+Browsers will not start audio without a gesture, so the audio context is made
+on the first click or key press anywhere, which every debater has made by the
+time they sit down. A Sound toggle in the header turns it off, and the choice
+is remembered in `localStorage`, wrapped like every other storage call.
+
+The room header also carries the spectator count next to the motion, live from
+the `room:state` pushes that every join and leave already sends. The sidebar
+had the number, but on a phone the sidebar is a tab away.
+
+## Phones
+
+Below 760px the room is one panel at a time, Stage or Audience, chosen by two
+tabs at the top. The sidebar used to be hidden outright at that width, which
+meant a phone could watch but never talk, ask a question or see the floor's
+questions. Inside a room the header trades the wordmark for the motion, since
+the lobby already carries the brand and the room needs the context, and its two
+buttons shorten to fit. The seats stack name over button so a long name never
+pushes the button off, the floor row wraps instead of overflowing, and the
+composer gives the input a full line with Send and Call it sharing the next.
+Inputs are 16px so iOS does not zoom the page when one is focused, and the page
+is sized to `100dvh`, the viewport actually visible under the browser's own
+bar.
+
+One trap worth keeping: the page body clips horizontal overflow, so a check for
+"does the page scroll sideways" passes even with a button half off the screen.
+The 390px browser test measures each control's box against the viewport
+instead, and that is how it caught the header pushing Leave off the edge and
+the result card's buttons sitting below the fold. The second one was a flex
+column whose panel had no `min-height: 0`, so it could not shrink below its
+content.
+
+## Keyboard and screen readers
+
+Every step of a debate works from the keyboard: Tab to the motion, Enter to
+start, the modal takes focus and Enter in the name joins, Enter on a seat claims
+it and moves the cursor to the composer, Enter posts, and Start, Yield and the
+two-step Call it are ordinary buttons. The modal keeps focus inside itself,
+closes on Escape or a click on the backdrop, and hands focus back to whatever
+opened it.
+
+The stage and the sidebar are `role="log"` regions, which is the ARIA pattern
+for chat: new lines are read as they arrive and the history is not re-read.
+System lines are in the stage log, so a screen reader hears "X yields the
+floor" in order with the arguments. Toasts are a polite status region, and the
+turn announcer is assertive. Inputs whose only label was a placeholder now have
+real ones.
+
+Focus is a 3px dashed ring in the overprint violet, the same cut line the stage
+seam is drawn with, and a focused button also takes the lift and the hard
+shadow a hovered one gets, so a keyboard user sees exactly the state a mouse
+user does.
 
 ## Look
 
@@ -960,6 +1024,16 @@ swapping the seats in both tabs.
 Then the archive's search running as a real form, a debater's page showing the
 loss from their side, and a challenge posted in one tab and taken in another,
 with both landing on the stage seated on the right sides.
+
+A phone at 390 pixels goes through a whole debate with every control measured
+against the viewport: the modal, the header, the tabs, the seats, the composer,
+the gauge, the floor bar and Yield, the audience panel behind its tab, and the
+result card with all three of its buttons. Then the same debate from the
+keyboard alone, reaching every control by Tab, with the focus ring checked,
+the modal closing on Escape and giving focus back, the turn announced to both
+the debater and the audience, both logs marked as logs, and the header count
+following a watcher in and out. Last, the sound toggle surviving a reload and
+the tone making no media request.
 
 What is still checked by hand is the reconnect path through a dropped TCP
 connection, which needs a proxy between the browser and the server, and

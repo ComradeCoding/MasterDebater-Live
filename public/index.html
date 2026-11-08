@@ -55,6 +55,8 @@
     background: var(--ink);
     color: var(--paper);
     height: 100vh;
+    /* The visible viewport on phones, where 100vh includes the browser bar. */
+    height: 100dvh;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -73,7 +75,20 @@
   body > * { position: relative; z-index: 1; }
 
   ::selection { background: var(--neon-deep); color: #fff; }
-  :focus-visible { outline: 2px solid var(--neon); outline-offset: 2px; }
+  :focus-visible { outline: 3px dashed var(--neon); outline-offset: 3px; }
+  button:focus-visible:not(:disabled) {
+    box-shadow: var(--paste) var(--neon);
+    transform: translate(-1px, -1px);
+  }
+  input:focus-visible { outline-offset: 1px; }
+  .messages:focus-visible { outline-offset: -3px; }
+
+  /* Read aloud, never drawn. */
+  .sr-only {
+    position: absolute !important;
+    width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
 
   ::-webkit-scrollbar { width: 9px; height: 9px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -205,6 +220,28 @@
     white-space: nowrap;
   }
   .spacer { flex: 1; }
+
+  /* How many are watching, next to the motion. The sidebar has the same
+     number, but on a phone the sidebar is a tab away. */
+  .header-count {
+    flex-shrink: 0;
+    font-family: var(--data);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--dim);
+    white-space: nowrap;
+  }
+  .header-count b { color: var(--paper); }
+
+  /* A small secondary control: same ink, no fill, so it never competes with
+     Leave. */
+  button.quiet { padding: 6px 10px; font-size: 11px; border-color: var(--rule-hot); color: var(--muted); }
+  button.quiet[aria-pressed="false"] { color: var(--dim); text-decoration: line-through; }
+
+  /* Phone only: the stage and the audience as two tabs. */
+  .mtabs { display: none; }
 
   /* --------------------------------------------------------------- lobby -- */
 
@@ -1111,7 +1148,53 @@
   #toast.show { opacity: 1; }
 
   @media (max-width: 760px) {
-    .side { display: none; }
+    /* One panel at a time. The room becomes a column: tabs, then whichever
+       panel is chosen, filling the rest of the screen. */
+    #room.active { flex-direction: column; }
+    .mtabs { display: flex; flex-shrink: 0; background: var(--ink-2); border-bottom: 2px solid var(--rule); }
+    .mtabs button {
+      flex: 1; border: 0; border-bottom: 3px solid transparent; padding: 10px 8px;
+      font-size: 13px; color: var(--muted); box-shadow: none; transform: none;
+    }
+    .mtabs button[aria-selected="true"] { color: var(--paper); border-bottom-color: var(--neon); }
+    .mtabs button:hover:not(:disabled) { background: var(--plate); color: var(--paper); box-shadow: none; transform: none; }
+    .side { display: none; width: 100%; border-left: 0; flex: 1; }
+    /* In a column, a flex child will not shrink below its content without
+       this, and the result card ends up below the fold. */
+    .stage, .side { min-height: 0; }
+    #room.side-open .stage { display: none; }
+    #room.side-open .side { display: flex; }
+
+    header { padding: 10px 14px; gap: 10px; }
+    .logo { font-size: 18px; }
+    body.in-room .logo { display: none; }
+    .header-topic { flex: 1; min-width: 0; padding-left: 0; border-left: 0; font-size: 14px; }
+    header .wide { display: none; }
+    header button { padding: 6px 10px; font-size: 12px; white-space: nowrap; }
+    header .spacer { display: none; }
+
+    /* Seats: name above the button, so a long name never pushes it off. */
+    .seat { flex-direction: column; align-items: flex-start; padding: 10px 14px; gap: 6px; }
+    .seat.con { flex-direction: column; align-items: flex-end; }
+    .seat > div { min-width: 0; max-width: 100%; }
+    .seat .who { font-size: 19px; }
+
+    .messages { padding: 14px; }
+    .floorrow { padding: 8px 14px; gap: 8px; flex-wrap: wrap; letter-spacing: .12em; }
+    .floorrow .holder { flex: 1 1 40%; }
+    .floorrow .spacer { display: none; }
+    .floor.callorder .floorrow { padding: 10px 14px; }
+    .floor.callorder .floorrow .holder { flex-basis: 100%; order: 3; }
+    .pinq { margin: 10px 14px 8px; }
+    .typing { padding: 0 14px 6px; }
+
+    /* Composer: the input gets the whole first line, the two buttons share the
+       second, so neither the text nor Call it is squeezed to nothing. */
+    .composer { padding: 10px 14px; flex-wrap: wrap; }
+    #debateComposer input { flex: 1 0 100%; font-size: 16px; }
+    #debateComposer button { flex: 1; }
+    /* 16px stops iOS zooming the page on focus. */
+    input { font-size: 16px; }
     #lobby { padding: 34px 20px 56px; }
     .lobby-inner h1 .w1, .lobby-inner h1 .w2 { font-size: 38px; }
     .lobby-inner h1 .w3 { font-size: 46px; margin-top: 10px; letter-spacing: .06em; }
@@ -1122,13 +1205,16 @@
     .bubble.pro { align-self: flex-start; }
     .bubble.con { align-self: flex-end; }
     .sysline { align-self: center; }
-    .verdict { flex-wrap: wrap; padding: 10px 16px; }
+    .verdict { flex-wrap: wrap; padding: 10px 14px; gap: 10px; }
     .gaugewrap { order: -1; flex: 1 0 100%; }
     .verdict button.lean { flex: 1; }
     .result { gap: 14px; padding: 14px 16px; }
     .result .swing .n { font-size: 40px; }
     .result .acts { flex: 1 0 100%; }
-    .result .acts a.primary, .result .acts button { flex: 1; text-align: center; }
+    .result .acts { gap: 8px; }
+    .result .acts a.primary, .result .acts button {
+      flex: 1 1 auto; text-align: center; padding: 8px 6px; font-size: 12.5px; white-space: nowrap;
+    }
     .settled-card .n { width: 44px; font-size: 22px; }
   }
 
@@ -1142,8 +1228,12 @@
 <header>
   <div class="logo">MasterDebater <span>Live</span></div>
   <div class="header-topic" id="headerTopic"></div>
+  <!-- Live: room:state carries the count, and every join and leave pushes one. -->
+  <div class="header-count" id="headerCount" hidden aria-live="off"></div>
   <div class="spacer"></div>
-  <button id="leaveBtn" hidden>Leave debate</button>
+  <button id="soundBtn" class="quiet" hidden aria-pressed="true"
+          title="A short tone when the floor passes to you">&#9834;<span class="wide"> Sound</span> on</button>
+  <button id="leaveBtn" hidden>Leave<span class="wide"> debate</span></button>
 </header>
 
 <!-- ------------------------------------------------------------- lobby -->
@@ -1152,7 +1242,8 @@
     <h1><span class="w1">Pick</span> <span class="w2">a side.</span><br><span class="w3">Prove it.</span></h1>
     <div class="sub">Two seats up front. Everybody else watches and runs their mouth.</div>
     <div class="create-row">
-      <input id="topicInput" maxlength="140" placeholder="What are we arguing about?" autocomplete="off">
+      <input id="topicInput" maxlength="140" placeholder="What are we arguing about?" autocomplete="off"
+             aria-label="Motion for a new debate">
       <button class="primary" id="createBtn">Start it</button>
     </div>
     <div class="section-label">Challenges</div>
@@ -1177,7 +1268,11 @@
 
 <!-- -------------------------------------------------------------- room -->
 <div id="room">
-  <div class="stage">
+  <div class="mtabs" role="tablist" aria-label="Show">
+    <button role="tab" id="tabStage" aria-selected="true" aria-controls="stagePanel">Stage</button>
+    <button role="tab" id="tabSide" aria-selected="false" aria-controls="sidePanel">Audience <span id="tabCount"></span></button>
+  </div>
+  <div class="stage" id="stagePanel">
     <div class="seats">
       <div class="seat pro">
         <div>
@@ -1240,7 +1335,7 @@
       </div>
     </div>
 
-    <div class="messages" id="debateMsgs"></div>
+    <div class="messages" id="debateMsgs" role="log" aria-live="polite" aria-label="The stage" tabindex="0"></div>
     <div class="typing" id="typing"></div>
 
     <!-- Two fixed composers, toggled by role. Rebuilding this markup on every
@@ -1261,7 +1356,8 @@
     </div>
 
     <div class="composer" id="debateComposer">
-      <input id="debateInput" maxlength="1000" placeholder="Make your case…" autocomplete="off">
+      <input id="debateInput" maxlength="1000" placeholder="Make your case…" autocomplete="off"
+             aria-label="Your argument">
       <button class="primary" id="debateSend">Send</button>
       <!-- Two-step: an accidental click here would end the debate for everyone. -->
       <button id="callIt">Call it</button>
@@ -1271,7 +1367,7 @@
     </div>
   </div>
 
-  <div class="side">
+  <div class="side" id="sidePanel">
     <div class="head">
       <span>Audience</span>
       <button class="unmute" id="unmuteAll" hidden></button>
@@ -1287,7 +1383,7 @@
         <button id="qSend">Ask</button>
       </div>
     </div>
-    <div class="messages" id="audMsgs"></div>
+    <div class="messages" id="audMsgs" role="log" aria-live="polite" aria-label="Audience chat" tabindex="0"></div>
     <div class="composer">
       <input id="audInput" maxlength="1000" placeholder="Run your mouth…" autocomplete="off"
              aria-label="Message the audience">
@@ -1322,7 +1418,8 @@
   </div>
 </div>
 
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<div class="sr-only" id="announcer" aria-live="assertive" aria-atomic="true"></div>
 
 <script>
 (function () {
@@ -1688,12 +1785,45 @@
   // The modal now gates on the stance, not the name, so it opens on every join
   // even for a returning visitor: the opening reading is per-debate, and it is
   // only worth anything if it is taken before this particular argument is read.
+  // The modal keeps focus inside itself while open, closes on Escape, and hands
+  // focus back to whatever opened it, so a keyboard user is never stranded on
+  // a control that has just been covered up.
+  var modalReturn = null;
+  function openModal() {
+    modalReturn = document.activeElement;
+    $('modal').classList.add('active');
+  }
+  function closeModal() {
+    $('modal').classList.remove('active');
+    pendingRoomId = null;
+    modalThen = null;
+    if (modalReturn && modalReturn.focus && document.body.contains(modalReturn)) modalReturn.focus();
+    modalReturn = null;
+  }
+  document.addEventListener('keydown', function (e) {
+    if (!$('modal').classList.contains('active')) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeModal(); return; }
+    if (e.key !== 'Tab') return;
+    var f = Array.prototype.filter.call(
+      $('modal').querySelectorAll('input, button'),
+      function (el) { return !el.disabled && el.offsetParent !== null; }
+    );
+    if (!f.length) return;
+    var first = f[0];
+    var last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+  $('modal').addEventListener('mousedown', function (e) {
+    if (e.target === $('modal')) closeModal(); // a click on the dimmed backdrop
+  });
+
   function askNameThenJoin(roomId) {
     pendingRoomId = roomId;
     modalThen = null;
     setStance('undecided');
     setModalMode(true);
-    $('modal').classList.add('active');
+    openModal();
     $('nameInput').value = myName;
     $('handleInput').value = myHandle;
     $('nameInput').focus();
@@ -1708,7 +1838,7 @@
     pendingRoomId = null;
     modalThen = then;
     setModalMode(false);
-    $('modal').classList.add('active');
+    openModal();
     $('nameInput').value = '';
     $('handleInput').value = myHandle;
     $('nameInput').focus();
@@ -1748,6 +1878,7 @@
     myHandle = handle;
     safeSet('debateHandle', handle);
     $('modal').classList.remove('active');
+    modalReturn = null;
     if (modalThen) { var then = modalThen; modalThen = null; return then(); }
     if (pendingRoomId) joinRoom(pendingRoomId, myStance);
   };
@@ -1795,7 +1926,12 @@
     $('lobby').hidden = true;
     $('room').classList.add('active');
     $('leaveBtn').hidden = false;
+    $('soundBtn').hidden = false;
+    document.body.classList.add('in-room');
+    $('headerCount').hidden = false;
     $('headerTopic').textContent = res.room.topic;
+    showPanel('stage');
+    lastFloorSide = null;
 
     myClientId = res.myClientId || null;
     mutedIds = {};
@@ -1843,7 +1979,11 @@
     $('room').classList.remove('active');
     $('lobby').hidden = false;
     $('leaveBtn').hidden = true;
+    $('soundBtn').hidden = true;
+    document.body.classList.remove('in-room');
+    $('headerCount').hidden = true;
     $('headerTopic').textContent = '';
+    stopFlash();
     $('typing').textContent = '';
   }
 
@@ -1882,6 +2022,8 @@
       }
     });
     $('audCount').textContent = '· ' + r.audienceCount + ' watching';
+    $('headerCount').innerHTML = '<b>' + (r.audienceCount | 0) + '</b> watching';
+    $('tabCount').textContent = '(' + (r.audienceCount | 0) + ')';
 
     ['pro', 'con'].forEach(function (side) {
       var btn = $(side + 'Btn');
@@ -2105,6 +2247,10 @@
         if (res.error) return handleError(res);
         myRole = res.role;
         renderRoom();
+        // Sitting down is a request to speak, so the cursor goes where the
+        // speaking happens. On a phone, the stage is the panel that holds it.
+        showPanel('stage');
+        if (!$('debateInput').disabled) $('debateInput').focus();
       });
     }
   }
@@ -2129,7 +2275,9 @@
   });
 
   function applyTurn(t) {
+    var before = lastFloorSide;
     turn = t || { started: false };
+    noticeFloor(before);
     if (turn.started && !turn.paused) {
       turnDeadline = Date.now() + (turn.remainingMs || 0);
     }
@@ -2200,6 +2348,121 @@
       if (res.error) return toast(res.error);
     });
   };
+
+  // ------------------------------------------------------- your turn alert --
+  // The floor passing to you is the one moment the page has to get your
+  // attention even when you are looking at another tab. Three things happen:
+  // the title flashes until the page is looked at, a two-note tone plays
+  // (synthesized, nothing downloaded) unless sound is off, and a screen reader
+  // hears it through the assertive region. Everyone else hears whose turn it is
+  // through the same region, politely, with no tone and no flash.
+
+  var lastFloorSide = null;
+  var soundOn = safeGet('debateSound') !== 'off';
+  var audio = null;
+  var flashTimer = null;
+  var baseTitle = document.title;
+
+  function renderSound() {
+    $('soundBtn').setAttribute('aria-pressed', soundOn ? 'true' : 'false');
+    $('soundBtn').innerHTML = '\u266a<span class="wide"> Sound</span> ' + (soundOn ? 'on' : 'off');
+    $('soundBtn').setAttribute('aria-label', soundOn ? 'Sound on' : 'Sound off');
+  }
+  renderSound();
+  $('soundBtn').onclick = function () {
+    soundOn = !soundOn;
+    safeSet('debateSound', soundOn ? 'on' : 'off');
+    renderSound();
+    if (soundOn) tone();
+  };
+
+  // Browsers only let audio start after a gesture, so the context is created
+  // on the first click or key press anywhere, and is ready by the time it is
+  // needed.
+  function unlockAudio() {
+    if (audio) return;
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    try { audio = new Ctx(); } catch (e) { audio = null; }
+  }
+  document.addEventListener('pointerdown', unlockAudio, { once: true });
+  document.addEventListener('keydown', unlockAudio, { once: true });
+
+  // Two short square-wave notes, a fourth apart, falling: the sound of a bell
+  // on a counter rather than an alarm. Square because it is the photocopy of a
+  // sine: harder edges, same pitch.
+  function tone() {
+    if (!soundOn || !audio) return;
+    try {
+      if (audio.state === 'suspended') audio.resume();
+      var t0 = audio.currentTime + 0.01;
+      [[880, 0], [660, 0.16]].forEach(function (n) {
+        var osc = audio.createOscillator();
+        var gain = audio.createGain();
+        osc.type = 'square';
+        osc.frequency.value = n[0];
+        gain.gain.setValueAtTime(0.0001, t0 + n[1]);
+        gain.gain.exponentialRampToValueAtTime(0.08, t0 + n[1] + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + n[1] + 0.14);
+        osc.connect(gain);
+        gain.connect(audio.destination);
+        osc.start(t0 + n[1]);
+        osc.stop(t0 + n[1] + 0.15);
+      });
+    } catch (e) {}
+  }
+
+  function startFlash() {
+    stopFlash();
+    var on = false;
+    flashTimer = setInterval(function () {
+      on = !on;
+      document.title = on ? '\u25cf Your floor' : baseTitle;
+    }, 900);
+    document.title = '\u25cf Your floor';
+  }
+  function stopFlash() {
+    if (flashTimer) { clearInterval(flashTimer); flashTimer = null; }
+    document.title = baseTitle;
+  }
+  // Looking at the page is what the flash was asking for.
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) setTimeout(stopFlash, 1500);
+  });
+  window.addEventListener('focus', function () { setTimeout(stopFlash, 1500); });
+
+  function announce(text) {
+    var el = $('announcer');
+    el.textContent = '';
+    // A changed node is what triggers the read, so clear and set apart.
+    setTimeout(function () { el.textContent = text; }, 30);
+  }
+
+  function noticeFloor(before) {
+    var live = turn.started && !turn.paused && !concluded;
+    var side = live ? turn.side : null;
+    lastFloorSide = side;
+    if (!side || side === before) return;
+    var seated = myRole === 'pro' || myRole === 'con';
+    if (seated && side === myRole) {
+      announce(turn.round + '. You have the floor.');
+      tone();
+      if (document.hidden || !document.hasFocus()) startFlash();
+    } else {
+      announce(turn.round + '. ' + side.toUpperCase() + ' has the floor.');
+      if (seated) stopFlash();
+    }
+  }
+
+  // ------------------------------------------------------------ phone tabs --
+  function showPanel(which) {
+    var side = which === 'side';
+    $('room').classList.toggle('side-open', side);
+    $('tabStage').setAttribute('aria-selected', side ? 'false' : 'true');
+    $('tabSide').setAttribute('aria-selected', side ? 'true' : 'false');
+  }
+  $('tabStage').onclick = function () { showPanel('stage'); };
+  $('tabSide').onclick = function () { showPanel('side'); };
 
   // True only when this client may actually post to the stage right now.
   function haveFloor() {
