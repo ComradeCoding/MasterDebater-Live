@@ -128,12 +128,19 @@ Client to server: `{ id?, type, data }`. When `id` is present the server replies
 | `debate:start` | none | `{ ok, turn }`, seated debaters only, both seats filled |
 | `debate:pass` | none | `{ ok }`, only the side holding the floor |
 | `debate:typing` | `{ isTyping }` | `{ ok }`, relayed from debaters only |
+| `room:rematch` | none | `{ roomId, join }`, the two who argued a settled debate only |
 
 Server pushes: `lobby:rooms` (live room summaries), `lobby:results` (settled
 debates), `room:state` (one summary), `debate:message`, `audience:message`,
 `debate:system`, `audience:system`, `debate:typing` `{ name, role, isTyping }`,
 `room:lean` `{ pro, con, undecided }`, `debate:turn` (round, side, index, total,
-remainingMs, paused), and `room:concluded` `{ result, url }`.
+remainingMs, paused), `room:concluded` `{ result, url }`, and `room:rematch`
+`{ roomId, by, join }` to the debater who did not ask. A `debate:system` line
+may carry a `roomId`, which the client renders as a link.
+
+`join` is the same payload `room:join` acks with. Every path into a room hands
+back that one shape, so the client has one function that paints a room and
+does not care how it got there.
 
 Room summary: `{ id, topic, createdAt, status, proTaken, conTaken, proName,
 conName, audienceCount }`.
@@ -277,6 +284,29 @@ reject. The room drops off the live floor in the lobby and reappears under
 
 The write happens before the state change, so a failed write leaves the debate
 live and callable rather than ending it in a state whose permalink 404s.
+
+### Copy link and rematch
+
+The result card offers the permalink to copy, because sharing it is the only
+thing left to do with a settled debate. Where the clipboard API is missing or
+refuses, the link goes in the toast instead, so the button never does nothing.
+
+The two people who argued also get **Rematch**: same motion, a fresh room,
+sides swapped. Swapping is the point. Arguing the side you just argued against
+is the classic debating drill, and it tests whether a win came from the case or
+from the side of the motion that happened to be easier.
+
+Both debaters land in the new room already seated, which bends the rule that
+everyone arrives as audience. The rule exists so a seat is a deliberate act,
+and here it already was: each of them chose this motion and argued it, and
+asking them to race for the seats again would be ceremony. They are struck from
+the panel on arrival, exactly as claiming a seat would strike them. The other
+debater is moved only if they are still looking at the result; someone who has
+already gone into another room is not pulled back out of it, and their seat is
+left open. A second click, or both asking at once, returns the rematch that
+already exists. Everyone else watching the old result gets a system line with a
+link, and goes through the join modal like any arrival, because their opening
+stance on the second round is worth recording fresh.
 
 ## The permalink
 
@@ -566,7 +596,7 @@ is a name and a boolean, and the runner is forty lines at the top of the file.
 Node 22 ships a global `WebSocket` client, so the tests speak to the server
 through the same API a browser uses.
 
-144 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so a six-turn
+152 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so a six-turn
 format runs in six seconds rather than thirteen minutes.
 
 The first 40 cover the live room: lobby push on connect, topic
@@ -579,7 +609,7 @@ histories and seat state, server-side truncation of a 5000-character message to
 1000, raw storage of markup, the lobby listing, seat release, and a debater's
 disconnect freeing their seat.
 
-The next 38 cover the verdict and the record: an entry stance recorded at
+The next 46 cover the verdict and the record: an entry stance recorded at
 join and the fact that re-joining cannot rewrite it, the undecided count in the
 live tally, all four conclusion guards, a hand-computed verdict checked figure by
 figure (panel, opening tally, closing tally, swing, winner, floor-crossings), a

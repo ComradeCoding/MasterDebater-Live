@@ -962,6 +962,9 @@
     box-shadow: var(--paste) var(--rule-hot); transform: none;
   }
 
+  .sysline a.go { color: #fff; margin-left: 6px; text-decoration: underline; text-underline-offset: 2px; }
+  .sysline a.go:hover { background: var(--paper); color: var(--ink); text-decoration: none; }
+
   #toast {
     position: fixed;
     bottom: 24px;
@@ -1110,6 +1113,8 @@
       <div class="acts">
         <a class="primary" id="resultOpen" href="#">See the record</a>
         <button id="resultCopy">Copy link</button>
+        <!-- Only the two who argued it see this. Same motion, sides swapped. -->
+        <button id="resultRematch" hidden>Rematch</button>
       </div>
     </div>
 
@@ -1279,10 +1284,27 @@
     if (nearBottom) container.scrollTop = container.scrollHeight;
   }
 
-  function addSystem(container, text) {
+  // A system line can carry a room to go to, which is how the audience of a
+  // settled debate is handed the rematch. The link is built with DOM calls
+  // and textContent, never markup, so nothing in `text` is ever parsed.
+  function addSystem(container, text, roomId) {
     var el = document.createElement('div');
     el.className = 'sysline';
     el.textContent = text;
+    if (roomId) {
+      var go = document.createElement('a');
+      go.href = '#';
+      go.className = 'go';
+      go.textContent = 'Watch it';
+      go.onclick = function (e) {
+        e.preventDefault();
+        socket.emit('room:leave');
+        showLobby();
+        askNameThenJoin(roomId);
+      };
+      el.appendChild(document.createTextNode(' '));
+      el.appendChild(go);
+    }
     appendScroll(container, el);
   }
 
@@ -1414,39 +1436,47 @@
         if (res.resultUrl) { location.href = res.resultUrl; return; }
         return toast(res.error);
       }
-      currentRoom = res.room;
-      myRole = res.role;
-      myLean = res.myLean || null;
-      myEntry = res.myEntry || null;
-      lean = res.lean || { pro: 0, con: 0, undecided: 0 };
-      concluded = res.room.status === 'concluded';
-      pendingRoomId = null;
-
-      // The first ballot filed under this browser id is permanent, so a
-      // re-entry can silently disagree with the modal. Say so rather than
-      // showing a stance that quietly did not take.
-      if (stance && myEntry !== (stance === 'undecided' ? null : stance)) {
-        toast('You already went on record here as ' +
-          (myEntry ? myEntry.toUpperCase() : 'UNDECIDED') + '.');
-      }
-
-      $('lobby').hidden = true;
-      $('room').classList.add('active');
-      $('leaveBtn').hidden = false;
-      $('headerTopic').textContent = res.room.topic;
-
-      $('debateMsgs').innerHTML = '';
-      $('audMsgs').innerHTML = '';
-      $('typing').textContent = '';
-      (res.debateMessages || []).forEach(addDebateMsg);
-      (res.audienceMessages || []).forEach(addAudienceMsg);
-      $('debateMsgs').scrollTop = $('debateMsgs').scrollHeight;
-      $('audMsgs').scrollTop = $('audMsgs').scrollHeight;
-
-      // applyTurn calls renderRoom itself, so the composer is gated by the
-      // floor on the very first paint rather than a frame later.
-      applyTurn(res.turn);
+      enterRoom(res, stance);
     });
+  }
+
+  // Paints a room from a join payload. The ordinary join, a rematch and an
+  // accepted challenge all hand back the same shape, so they all land here.
+  function enterRoom(res, stance) {
+    disarmCallIt();
+    $('resultCard').hidden = true;
+    currentRoom = res.room;
+    myRole = res.role;
+    myLean = res.myLean || null;
+    myEntry = res.myEntry || null;
+    lean = res.lean || { pro: 0, con: 0, undecided: 0 };
+    concluded = res.room.status === 'concluded';
+    pendingRoomId = null;
+
+    // The first ballot filed under this browser id is permanent, so a
+    // re-entry can silently disagree with the modal. Say so rather than
+    // showing a stance that quietly did not take.
+    if (stance && myEntry !== (stance === 'undecided' ? null : stance)) {
+      toast('You already went on record here as ' +
+        (myEntry ? myEntry.toUpperCase() : 'UNDECIDED') + '.');
+    }
+
+    $('lobby').hidden = true;
+    $('room').classList.add('active');
+    $('leaveBtn').hidden = false;
+    $('headerTopic').textContent = res.room.topic;
+
+    $('debateMsgs').innerHTML = '';
+    $('audMsgs').innerHTML = '';
+    $('typing').textContent = '';
+    (res.debateMessages || []).forEach(addDebateMsg);
+    (res.audienceMessages || []).forEach(addAudienceMsg);
+    $('debateMsgs').scrollTop = $('debateMsgs').scrollHeight;
+    $('audMsgs').scrollTop = $('audMsgs').scrollHeight;
+
+    // applyTurn calls renderRoom itself, so the composer is gated by the
+    // floor on the very first paint rather than a frame later.
+    applyTurn(res.turn);
   }
 
   function showLobby() {
@@ -1511,6 +1541,7 @@
     // Once it is settled the record is the only control on the stage. Leaving a
     // live composer up would offer an action the server now refuses.
     $('resultCard').hidden = !concluded;
+    $('resultRematch').hidden = !concluded || !seated;
     $('debateComposer').hidden = concluded || !seated;
     $('debateHint').hidden = concluded || seated;
     $('callIt').hidden = !seated;
@@ -1774,22 +1805,43 @@
 
     var href = url || ('/d/' + result.id);
     $('resultOpen').href = href;
-    $('resultCopy').onclick = function () {
-      var full = location.origin + href;
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(full)
-          .then(function () { toast('Link copied.'); })
-          .catch(function () { toast(full); });
-      } else {
-        toast(full);
-      }
-    };
+    $('resultCopy').onclick = function () { copyText(location.origin + href); };
   }
+
+  // The clipboard API needs a secure context and a focused page. Where it is
+  // missing or refuses, the link is put in the toast so it can still be read
+  // off and typed, rather than the button doing nothing.
+  function copyText(full) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(full)
+        .then(function () { toast('Link copied.'); })
+        .catch(function () { toast(full); });
+    } else {
+      toast(full);
+    }
+  }
+
+  // Same motion, sides swapped. The server moves both debaters into the new
+  // room already seated, so this lands on the stage, not in the join modal.
+  $('resultRematch').onclick = function () {
+    socket.emit('room:rematch', function (res) {
+      if (res.error) return toast(res.error);
+      if (currentRoom && currentRoom.id === res.roomId) return; // already moved
+      enterRoom(res.join);
+      toast('Rematch. You are ' + String(res.join.role).toUpperCase() + ' this time.');
+    });
+  };
+
+  socket.on('room:rematch', function (d) {
+    if (!d || !d.join) return;
+    enterRoom(d.join);
+    toast(d.by + ' called a rematch. You are ' + String(d.join.role).toUpperCase() + ' this time.');
+  });
 
   // ---------------------------------------------------------------- stage --
 
   socket.on('debate:message', addDebateMsg);
-  socket.on('debate:system', function (m) { addSystem($('debateMsgs'), m.text); });
+  socket.on('debate:system', function (m) { addSystem($('debateMsgs'), m.text, m.roomId); });
 
   function addDebateMsg(m) {
     var el = document.createElement('div');

@@ -452,6 +452,38 @@ async function runVerdict() {
   check('the permalink asks for a large twitter card',
     page.body.includes('<meta name="twitter:card" content="summary_large_image">'));
 
+  // --- rematch ---------------------------------------------------------------
+  // Nadia argued PRO and Roman CON. A rematch swaps them.
+  const audienceRematch = await v1.emit('room:rematch');
+  check('the audience cannot call a rematch', !!audienceRematch.error, JSON.stringify(audienceRematch));
+
+  const pushed = new Promise((resolve) => {
+    con.on('room:rematch', (d) => resolve(d));
+    setTimeout(() => resolve(null), 2000);
+  });
+  const rematch = await pro.emit('room:rematch');
+  check('a debater can call a rematch', typeof rematch.roomId === 'string' && rematch.roomId !== roomId,
+    JSON.stringify(rematch && rematch.roomId));
+  check('the rematch lands the caller seated on the other side',
+    rematch.join && rematch.join.role === 'con', JSON.stringify(rematch.join && rematch.join.role));
+  const theirs = await pushed;
+  check('the other debater is pushed into the rematch on the other side',
+    theirs && theirs.roomId === rematch.roomId && theirs.join && theirs.join.role === 'pro',
+    JSON.stringify(theirs && { roomId: theirs.roomId, role: theirs.join && theirs.join.role }));
+  check('the rematch room has both seats swapped',
+    rematch.join && rematch.join.room.proName === 'Roman' && rematch.join.room.conName === 'Nadia' &&
+    rematch.join.room.topic === 'Homework should be abolished',
+    JSON.stringify(rematch.join && rematch.join.room));
+  await wait(120);
+  check('everyone else is handed a link to the rematch',
+    v1.got('debate:system').some((s) => s.roomId === rematch.roomId && /Rematch/.test(s.text)),
+    JSON.stringify(v1.got('debate:system').slice(-2)));
+  const again2 = await con.emit('room:rematch');
+  check('asking twice does not open a second rematch', again2.roomId === rematch.roomId,
+    JSON.stringify(again2.roomId));
+  const fresh = await pro.emit('debate:message', { text: 'Round two.' });
+  check('the rematch is a live room the debaters can argue in', !fresh.error, JSON.stringify(fresh));
+
   [pro, con, v1, v2, v3, v4].forEach((c) => c.close());
   await wait(150);
 

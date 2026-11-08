@@ -494,6 +494,49 @@ function leaveRoom(client) {
   store.scheduleReap(room, broadcastLobby);
 }
 
+// Everything a client needs to draw a room it has just entered. Shared by the
+// ordinary join and by the paths that land someone straight in a seat, so all
+// of them paint the same first frame.
+function joinPayload(room, client, ballot) {
+  return {
+    ok: true,
+    room: roomSummary(room),
+    role: client.role,
+    // Late joiners get both streams in full so nothing is missed.
+    debateMessages: room.debateMessages,
+    audienceMessages: room.audienceMessages,
+    lean: leanTally(room),
+    myLean: client.lean,
+    // Echoed back so a returning voter sees their original stance, not the
+    // one they just picked in a modal the server ignored.
+    myEntry: ballot ? ballot.entry : null,
+    // Late arrivals and reconnects need the clock, not just the history. The
+    // remaining time is computed at send, so it is correct on arrival.
+    turn: format.turnState(room),
+  };
+}
+
+// The exception to "everyone arrives as audience": a rematch and an accepted
+// challenge put people straight into a seat, because each of them has already
+// said which side of this motion they will argue. They are struck from the
+// panel the moment they arrive, exactly as a claimed seat would strike them.
+function enterSeated(room, client, side) {
+  if (client.room) leaveRoom(client);
+  client.room = room;
+  client.role = side;
+  client.voterId = client.voterId || `anon-${client.id}`;
+  const ballot = store.openBallot(room, client.voterId, null);
+  if (ballot) ballot.seated = true;
+  client.lean = ballot ? ballot.current : null;
+  store.addMember(room, client);
+  store.takeSeat(room, side, client);
+  broadcastRoom(room, 'debate:system', {
+    text: `${client.name} takes the ${side.toUpperCase()} side`,
+    ts: Date.now(),
+  });
+  return joinPayload(room, client, ballot);
+}
+
 // ---------------------------------------------------------------------------
 // The clock
 // ---------------------------------------------------------------------------
@@ -702,22 +745,63 @@ const handlers = {
       { text: `${client.name} joined the audience`, ts: Date.now() }, client);
     publishRoom(room);
 
-    return {
-      ok: true,
-      room: roomSummary(room),
-      role: 'audience',
-      // Late joiners get both streams in full so nothing is missed.
-      debateMessages: room.debateMessages,
-      audienceMessages: room.audienceMessages,
-      lean: leanTally(room),
-      myLean: client.lean,
-      // Echoed back so a returning voter sees their original stance, not the
-      // one they just picked in a modal the server ignored.
-      myEntry: ballot ? ballot.entry : null,
-      // Late arrivals and reconnects need the clock, not just the history. The
-      // remaining time is computed at send, so it is correct on arrival.
-      turn: format.turnState(room),
-    };
+    return joinPayload(room, client, ballot);
+  },
+
+  // Same motion, sides swapped. Only the two people who argued it can ask,
+  // and both of them land in the new room already seated, since they have
+  // each already committed to a side of this motion once.
+  'room:rematch'(client) {
+    const room = client.room;
+    if (!room) return { error: 'Join a debate first.' };
+    // A second click, or both debaters asking at once: the first one already
+    // moved this client into the rematch, so say where it is.
+    if (room.status === 'live' && room.rematchOf && (client.role === 'pro' || client.role === 'con')) {
+      return { roomId: room.id, join: joinPayload(room, client, store.getBallot(room, client.voterId)) };
+    }
+    if (room.status !== 'concluded') return { error: 'Only a settled debate can be rematched.' };
+    const side = client.role;
+    if ((side !== 'pro' && side !== 'con') || !room.seats[side] || room.seats[side].clientId !== client.id) {
+      return { error: 'Only the two debaters can call a rematch.' };
+    }
+    if (room.rematchId && store.getRoom(room.rematchId)) {
+      return { error: 'The rematch is already on.' };
+    }
+    if (store.listRooms().length >= MAX_ROOMS) {
+      return { error: 'Too many live debates right now. Try again soon.' };
+    }
+
+    const otherSide = side === 'pro' ? 'con' : 'pro';
+    const otherSeat = room.seats[otherSide];
+    // Only someone still looking at this result gets moved. A debater who has
+    // already wandered off to another room is not yanked back out of it.
+    let other = null;
+    for (const c of room.members) {
+      if (otherSeat && c.id === otherSeat.clientId && c.role === otherSide) other = c;
+    }
+
+    const next = store.createRoom(room.topic);
+    next.rematchOf = room.id;
+    room.rematchId = next.id;
+
+    const mine = enterSeated(next, client, otherSide);
+    if (other) {
+      const theirs = enterSeated(next, other, side);
+      sendTo(other, 'room:rematch', { roomId: next.id, by: client.name, join: theirs });
+    }
+    publishRoom(next);
+    store.scheduleReap(next, broadcastLobby);
+
+    // Everyone left watching the old result gets a way in.
+    broadcastRoom(room, 'debate:system', {
+      text: `Rematch: ${client.name} takes ${otherSide.toUpperCase()}` +
+        (otherSeat ? `, ${otherSeat.name} takes ${side.toUpperCase()}` : ''),
+      ts: Date.now(),
+      roomId: next.id,
+    });
+    // Refresh the lobby for the new room's seat state too.
+    broadcastLobby();
+    return { roomId: next.id, join: { ...mine, room: roomSummary(next) } };
   },
 
   'room:leave'(client) {
