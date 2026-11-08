@@ -739,6 +739,59 @@ async function runQuestions() {
   [pro, con, a1, a2, a3, latecomer].forEach((c) => c.close());
   await wait(150);
 
+  await runArchive();
+}
+
+// ==========================================================================
+// The archive page
+// ==========================================================================
+// Three debates are settled by now, with swings the earlier sections checked
+// by hand: homework +2 with one crossing, juries +1, cities 0. Settled in that
+// order, so newest first is the reverse.
+
+async function runArchive() {
+  const order = (body, ...topics) => {
+    const at = topics.map((t) => body.indexOf(t));
+    return at.every((i) => i >= 0) && at.every((i, k) => k === 0 || at[k - 1] < i);
+  };
+  const H = 'Homework should be abolished';
+  const J = 'Juries should be abolished';
+  const C = 'Cities should ban cars';
+
+  const page = await fetchText('/archive');
+  check('the archive lists every settled debate', page.status === 200 &&
+    page.body.includes(H) && page.body.includes(J) && page.body.includes(C), String(page.status));
+  check('the archive runs no script', /script-src 'none'/.test(page.csp || ''), page.csp);
+  check('the archive\'s only relaxation is its own search form',
+    /form-action 'self'/.test(page.csp || '') && (page.csp || '').split("'unsafe-inline'").length === 2,
+    page.csp);
+  check('the archive opens newest first', order(page.body, C, J, H));
+  check('it sorts by biggest swing', order((await fetchText('/archive?sort=swing')).body, H, J, C));
+  check('it sorts by most contested, smallest margin first',
+    order((await fetchText('/archive?sort=contested')).body, C, J, H));
+  check('an unknown sort falls back to newest',
+    order((await fetchText('/archive?sort=constructor')).body, C, J, H));
+
+  const byMotion = (await fetchText('/archive?q=juries+abolished')).body;
+  check('search finds a motion by every word in it', byMotion.includes(J) && !byMotion.includes(H));
+  const byName = (await fetchText('/archive?q=NADIA')).body;
+  check('search finds a debater by name, ignoring case', byName.includes(H) && !byName.includes(J));
+  const both = (await fetchText('/archive?q=abolished&sort=swing')).body;
+  check('search and sort combine', order(both, H, J) && !both.includes(C));
+  const nothing = (await fetchText('/archive?q=zzqqxx')).body;
+  check('a search with no hits says so', /Nothing on the record matches/.test(nothing));
+  const nasty = await fetchText('/archive?q=%3Cscript%3Ealert(1)%3C%2Fscript%3E');
+  check('the search terms are escaped on the way back out',
+    nasty.status === 200 && !nasty.body.includes('<script>alert'));
+  check('a search result asks not to be indexed',
+    nasty.body.includes('<meta name="robots" content="noindex">') &&
+    !page.body.includes('<meta name="robots" content="noindex">'));
+
+  const map = await fetchText('/sitemap.xml');
+  check('the sitemap lists the archive', /<loc>[^<]*\/archive<\/loc>/.test(map.body));
+  const app = await fetchText('/');
+  check('the lobby links to the archive', app.body.includes('href="/archive"'));
+
   await runChallenges();
 }
 

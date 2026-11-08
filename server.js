@@ -30,6 +30,7 @@ const { computeVerdict, verdictLine } = require('./verdict');
 const archive = require('./archive');
 const resultpage = require('./resultpage');
 const card = require('./card');
+const archivepage = require('./archivepage');
 const format = require('./format');
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -1350,7 +1351,10 @@ const MIME = {
 // Shared by both HTML routes. `scriptSrc` is the only thing that differs: the
 // live page has one inline block and needs 'unsafe-inline'; a result page is a
 // static document, so it gets the stricter 'none'.
-const securityHeaders = (scriptSrc) => ({
+// `formAction` is 'none' everywhere except the archive, whose search box is a
+// plain GET form back to itself. Everything else in its policy is identical
+// to the permalink's, scripts included.
+const securityHeaders = (scriptSrc, formAction = "'none'") => ({
   'Cache-Control': 'no-cache',
   'Content-Security-Policy':
     `default-src 'none'; script-src ${scriptSrc}; style-src 'unsafe-inline'; ` +
@@ -1359,7 +1363,7 @@ const securityHeaders = (scriptSrc) => ({
     // a blob. Without this, default-src 'none' blocks it and the only symptom
     // is silence.
     "media-src blob:; " +
-    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    `base-uri 'none'; form-action ${formAction}; frame-ancestors 'none'`,
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'no-referrer',
@@ -1403,6 +1407,7 @@ function buildSitemap(origin) {
   const rows = [
     entry(`${origin}/`, '    <changefreq>weekly</changefreq>\n    <priority>1.0</priority>\n'),
     entry(`${origin}/arena`, '    <changefreq>hourly</changefreq>\n    <priority>0.9</priority>\n'),
+    entry(`${origin}/archive`, '    <changefreq>daily</changefreq>\n    <priority>0.8</priority>\n'),
   ];
   // Every settled debate. These are the pages worth finding: permanent,
   // self-contained, and the only reason anyone outside a room ever arrives.
@@ -1452,6 +1457,30 @@ const server = http.createServer((req, res) => {
       'Cache-Control': 'no-cache',
       'Content-Type': 'application/xml; charset=utf-8',
       'X-Content-Type-Options': 'nosniff',
+    });
+    return res.end(req.method === 'HEAD' ? undefined : body);
+  }
+
+  // --- the archive ---------------------------------------------------------
+  // Every settled debate the index holds, searchable and sortable. Rendered
+  // here, run under no script at all, and above the site split so it shares
+  // from either domain like the permalinks it lists.
+  if (urlPath === '/archive' || urlPath === '/archive/') {
+    let params;
+    try {
+      params = new URL(req.url || '/', 'http://local').searchParams;
+    } catch {
+      params = new URLSearchParams();
+    }
+    const body = archivepage.render(archive.list(archive.MAX_INDEX), {
+      query: clean(params.get('q'), archivepage.MAX_QUERY),
+      sort: params.get('sort') || 'newest',
+      origin: canonicalOrigin(req),
+      cap: archive.MAX_INDEX,
+    });
+    res.writeHead(200, {
+      ...securityHeaders("'none'", "'self'"),
+      'Content-Type': 'text/html; charset=utf-8',
     });
     return res.end(req.method === 'HEAD' ? undefined : body);
   }

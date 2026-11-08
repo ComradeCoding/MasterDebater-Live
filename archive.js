@@ -39,6 +39,10 @@ function summarize(record) {
     winner: record.verdict.winner,
     swing: record.verdict.swing,
     panel: record.verdict.panel,
+    // Floor-crossings, for the archive's "most contested" sort: two debates
+    // that both ended level are not equally close if one of them had half the
+    // room changing sides on the way there.
+    crossed: (record.verdict.moved && record.verdict.moved.crossed) | 0,
     proName: record.pro.name,
     conName: record.con.name,
   };
@@ -95,4 +99,4 @@ function boot() {
   return index.length;
 }
 
-module.exports = { DIR, isValidId, save, load, list, boot };
+module.exports = { DIR, MAX_INDEX, isValidId, save, load, list, boot };
