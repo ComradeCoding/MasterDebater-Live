@@ -386,10 +386,11 @@ means deleting its JSON file on the volume by hand.
 
 ## The clip art, and the tools that clean it up
 
-`tools/` holds two throwaway utilities and the small PNG reader they share.
-Neither runs at build or serve time; the images in `homesite/` are already
-processed. They are kept because both problems recur every time an image is
-added.
+`tools/` holds three utilities and the two codecs they share: `png.js` reads and
+writes 8-bit RGBA PNGs, and `gif.js` reads and writes animated GIFs, LZW and
+all. None of them runs at build time; the images in `homesite/` are already
+processed. They are kept because every one of these problems recurs each time
+an image is added.
 
 `dechecker.js` cuts a baked-in transparency checkerboard out of a PNG. Stock
 sites advertising a transparent PNG often serve the preview with the checker
@@ -410,12 +411,24 @@ Order matters. Cut the checker at full resolution, then downscale, so the
 checker colours are still flat when they are matched and the alpha edge gets
 anti-aliased on the way down.
 
-The page carries about 1.7 MB of clip art, down from 3.4 MB. Most of what is
-left is two files that are correctly sized for what they are: Ziggy at true 2x
-for a 480px corner, and Marx, whose GIF is 165x267 and is therefore being
-scaled up rather than down. The three icon GIFs are still several times larger
-than they are drawn, but shrinking an animated GIF means an LZW encoder and
-palette handling, which has not been worth writing yet.
+`gifresize.js` does the same job for animated GIFs, which is a harder one,
+because Node ships zlib for PNG and nothing at all for GIF. The codec decodes
+to whole composed frames, so the resampler only ever sees plain RGBA images,
+then re-encodes with one shared palette cut by median split, only the
+rectangle each frame changed, and a disposal plan that wipes exactly what the
+next frame needs dark. The icons are sized to a whole multiple of what the
+stylesheet draws: twice for the sickle (32x36 at 18px) and the mouse (42x52 at
+26px), three times for the book (66x60 at 22px) because it renders pixelated.
+A clean ratio matters more than raw size; at one and a half the browser lands
+between pixels the whole way across and looks worse than a smaller file would.
+
+The page carries about 1.5 MB of clip art, down from 3.4 MB. The three icon
+GIFs went from 337 KB to 44 KB between them. What is left is almost entirely
+two files that are correctly sized for what they are: Ziggy at true 2x for a
+480px corner (830 KB), and Marx (570 KB), whose GIF is 165x267 and is
+therefore being scaled up rather than down. Neither has anything left to give
+without visibly losing frames or colour, and the tests hold the icons to a byte
+budget so a full-size file dropped back in fails loudly.
 
 ## Crawlers
 
