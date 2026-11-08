@@ -329,6 +329,8 @@ const store = (() => {
       // Questions round opens. Votes are keyed by ballot id, like ballots.
       questions: [],
       pinnedQuestionId: null,
+      // voterId -> Set of speaker ids that debater has muted for themselves.
+      mutes: new Map(),
     };
   }
 
@@ -507,6 +509,15 @@ const store = (() => {
       durable.savePin(room);
     },
 
+    // --- mutes ----------------------------------------------------------------
+    setMute(room, voterId, target, on) {
+      const set = room.mutes.get(voterId) || new Set();
+      if (on) set.add(target); else set.delete(target);
+      room.mutes.set(voterId, set);
+      durable.saveMute(room.id, voterId, target, on);
+    },
+    mutesOf(room, voterId) { return [...(room.mutes.get(voterId) || [])]; },
+
     getBallot(room, voterId) { return room.ballots.get(voterId) || null; },
     listBallots(room) { return [...room.ballots.values()]; },
 
@@ -568,8 +579,9 @@ const store = (() => {
       for (const m of data.messages) {
         const room = byId(m.room_id);
         if (!room) continue;
-        (m.stream === 'debate' ? room.debateMessages : room.audienceMessages)
-          .push({ id: m.id, role: m.role, name: m.name, text: m.text, ts: m.ts });
+        const msg = { id: m.id, role: m.role, name: m.name, text: m.text, ts: m.ts };
+        if (m.speaker) msg.clientId = m.speaker;
+        (m.stream === 'debate' ? room.debateMessages : room.audienceMessages).push(msg);
       }
       for (const b of data.ballots) {
         const room = byId(b.room_id);
@@ -582,6 +594,13 @@ const store = (() => {
         const q = { id: qr.id, voterId: qr.voter_id, name: qr.name, text: qr.text, ts: qr.ts, votes: new Set() };
         room.questions.push(q);
         questions.set(q.id, q);
+      }
+      for (const mu of data.mutes) {
+        const room = byId(mu.room_id);
+        if (!room) continue;
+        const set = room.mutes.get(mu.voter_id) || new Set();
+        set.add(mu.target);
+        room.mutes.set(mu.voter_id, set);
       }
       for (const v of data.votes) {
         const q = questions.get(v.question_id);
@@ -625,6 +644,32 @@ const clients = new Set(); // every live connection, in a room or in the lobby
 // names, topics, or single-line chat: they enable name spoofing (U+202E flips
 // text direction) and log injection. Stripped before trim/truncate.
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+// ---------------------------------------------------------------------------
+// Names nobody gets to use
+// ---------------------------------------------------------------------------
+// Short on purpose: a denylist is a speed bump, not moderation, and a long one
+// mostly catches innocent names. Two kinds. Names that impersonate the site or
+// its staff are refused outright when they are the whole name. A handful of
+// slurs are refused anywhere inside a name, after folding accents, case,
+// spacing and the usual digit-for-letter swaps, so "N 1 g g" spellings fail too.
+// Words that commonly sit inside ordinary names are left out deliberately.
+const RESERVED_NAMES = new Set([
+  'admin', 'administrator', 'moderator', 'mod', 'system', 'staff', 'official',
+  'server', 'masterdebater', 'masterdebaterlive', 'comradecoding', 'support',
+]);
+const SLURS = ['nigger', 'nigga', 'faggot', 'retard', 'tranny', 'wetback', 'kike'];
+const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', 8: 'b', '@': 'a', $: 's', '!': 'i' };
+function foldName(s) {
+  return String(s || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    .replace(/[0-9@$!]/g, (c) => LEET[c] || c)
+    .replace(/[^a-z]/g, '');
+}
+function nameDenied(name) {
+  const f = foldName(name);
+  if (!f) return false;
+  return RESERVED_NAMES.has(f) || SLURS.some((w) => f.includes(w));
+}
 
 // Strip, trim, then truncate. Empty-after-trim is the caller's problem to reject.
 const clean = (value, max) =>
@@ -775,7 +820,8 @@ function leaveRoom(client) {
 // The board is used from the lobby, where nobody has been through the join
 // modal yet, so posting and accepting carry their own name and browser id.
 function identify(client, name, voterId) {
-  const n = clean(name, MAX_NAME_LEN);
+  let n = clean(name, MAX_NAME_LEN);
+  if (nameDenied(n)) n = '';
   // Not mid-room: a rename there would change who the stage says is talking.
   if (n && !client.room) client.name = n;
   if (!client.name) client.name = 'Guest';
@@ -783,6 +829,30 @@ function identify(client, name, voterId) {
   if (v && !client.voterId) client.voterId = v;
   if (!client.voterId) client.voterId = `anon-${client.id}`;
 }
+
+// ---------------------------------------------------------------------------
+// Talking too fast, and not having to listen
+// ---------------------------------------------------------------------------
+// Each stream gets its own small bucket per connection, on top of the
+// transport-wide flood guard in section 4. Five messages in ten seconds is
+// faster than anyone argues and slower than anyone spams. Only a message that
+// was actually going to be posted spends a token; a rejected one is free.
+const STREAM_BURST = 5;
+const STREAM_WINDOW_MS = 10000;
+function spend(client, stream) {
+  const now = Date.now();
+  const buckets = client.streams || (client.streams = {});
+  const b = buckets[stream] || (buckets[stream] = { tokens: STREAM_BURST, at: now });
+  b.tokens = Math.min(STREAM_BURST, b.tokens + ((now - b.at) * STREAM_BURST) / STREAM_WINDOW_MS);
+  b.at = now;
+  if (b.tokens < 1) return false;
+  b.tokens -= 1;
+  return true;
+}
+
+const SPEAKER_RE = /^[0-9a-f]{12}$/;
+const speakerId = (room, voterId) =>
+  crypto.createHash('sha256').update(`${room.id}:${voterId || ''}`).digest('hex').slice(0, 12);
 
 // ---------------------------------------------------------------------------
 // Handles
@@ -806,6 +876,7 @@ function claimHandle(handle, secret) {
   if (!HANDLE_RE.test(h)) {
     return { error: 'A handle is 2 to 20 letters, digits, dashes or underscores.' };
   }
+  if (nameDenied(h)) return { error: 'That handle is not available.' };
   if (typeof secret !== 'string' || !SECRET_RE.test(secret)) {
     return { error: 'This browser has no key for a handle.' };
   }
@@ -894,6 +965,10 @@ function joinPayload(room, client, ballot) {
       return q ? q.id : null;
     })(),
     myVotes: room.questions.filter((q) => client.voterId && q.votes.has(client.voterId)).map((q) => q.id),
+    // Who this browser has muted here, and its own public id so it never
+    // offers to mute itself.
+    muted: store.mutesOf(room, client.voterId),
+    myClientId: speakerId(room, client.voterId),
   };
 }
 
@@ -1144,6 +1219,10 @@ const handlers = {
       return { error: 'That debate is settled.', resultUrl: `/d/${room.id}` };
     }
 
+    // Checked before anything changes, so a refused name leaves the caller
+    // exactly where they were.
+    if (nameDenied(clean(name, MAX_NAME_LEN))) return { error: 'That name is not available. Pick another.' };
+
     if (client.room) leaveRoom(client);
 
     client.name = clean(name, MAX_NAME_LEN) || 'Guest';
@@ -1298,6 +1377,7 @@ const handlers = {
     }
     text = clean(text, MAX_MSG_LEN);
     if (!text) return { error: 'Say something first.' };
+    if (!spend(client, 'debate')) return { error: 'slow down' };
 
     const msg = store.appendMessage(room, 'debate',
       { role: client.role, name: client.name, text, ts: Date.now() });
@@ -1312,11 +1392,35 @@ const handlers = {
     if (room.status === 'concluded') return { error: 'This debate is settled.' };
     text = clean(text, MAX_MSG_LEN);
     if (!text) return { error: 'Say something first.' };
+    if (!spend(client, 'audience')) return { error: 'slow down' };
 
-    const msg = store.appendMessage(room, 'audience',
-      { role: client.role, name: client.name, text, ts: Date.now() });
+    // `clientId` is who said it, as far as a mute is concerned: a per-room
+    // id derived from the browser id, so muting someone survives them
+    // reconnecting, and nobody can work back from it to their ballot.
+    const msg = store.appendMessage(room, 'audience', {
+      role: client.role, name: client.name, text, ts: Date.now(),
+      clientId: speakerId(room, client.voterId),
+    });
     broadcastRoom(room, 'audience:message', msg);
     return { ok: true };
+  },
+
+  // A debater can stop seeing someone in the sidebar. For themselves only: the
+  // muted person still talks to everyone else, is not told, and the server
+  // still sends the messages. The mute list goes back to the debater's own
+  // browser, which does the hiding, and it comes back in every join ack.
+  'audience:mute'(client, { clientId, mute = true } = {}) {
+    const room = client.room;
+    if (!room) return { error: 'Join a debate first.' };
+    if (client.role !== 'pro' && client.role !== 'con') {
+      return { error: 'Only the debaters can mute someone.' };
+    }
+    if (typeof clientId !== 'string' || !SPEAKER_RE.test(clientId)) {
+      return { error: 'Mute whom?' };
+    }
+    if (clientId === speakerId(room, client.voterId)) return { error: 'You cannot mute yourself.' };
+    store.setMute(room, client.voterId, clientId, mute !== false);
+    return { ok: true, muted: store.mutesOf(room, client.voterId) };
   },
 
   // One question per audience member, taken while the rebuttals run. That is

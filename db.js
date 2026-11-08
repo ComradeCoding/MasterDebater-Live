@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS messages (
   role     TEXT NOT NULL,
   name     TEXT NOT NULL,
   text     TEXT NOT NULL,
-  ts       INTEGER NOT NULL
+  ts       INTEGER NOT NULL,
+  speaker  TEXT
 );
 CREATE INDEX IF NOT EXISTS messages_room ON messages (room_id, stream, id);
 CREATE TABLE IF NOT EXISTS ballots (
@@ -83,6 +84,12 @@ CREATE TABLE IF NOT EXISTS handles (
   secret_hash BLOB NOT NULL,
   created_at  INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS mutes (
+  room_id  TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  voter_id TEXT NOT NULL,
+  target   TEXT NOT NULL,
+  PRIMARY KEY (room_id, voter_id, target)
+);
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -109,6 +116,11 @@ function open(dir) {
   db.exec('PRAGMA synchronous = NORMAL');
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(SCHEMA);
+  // A database from before the mute existed has no speaker column. Adding it
+  // is the only migration so far, so it is done by hand rather than by a
+  // migration table.
+  const cols = db.prepare('PRAGMA table_info(messages)').all().map((c) => c.name);
+  if (!cols.includes('speaker')) db.exec('ALTER TABLE messages ADD COLUMN speaker TEXT');
 
   const q = (sql) => db.prepare(sql);
   const st = {
@@ -118,7 +130,9 @@ function open(dir) {
     roomDelete: q('DELETE FROM rooms WHERE id = ?'),
     seatPut: q('INSERT OR REPLACE INTO seats (room_id, side, name, handle, voter_id) VALUES (?, ?, ?, ?, ?)'),
     seatDelete: q('DELETE FROM seats WHERE room_id = ? AND side = ?'),
-    messageInsert: q('INSERT INTO messages (id, room_id, stream, role, name, text, ts) VALUES (?, ?, ?, ?, ?, ?, ?)'),
+    messageInsert: q('INSERT INTO messages (id, room_id, stream, role, name, text, ts, speaker) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'),
+    muteInsert: q('INSERT OR IGNORE INTO mutes (room_id, voter_id, target) VALUES (?, ?, ?)'),
+    muteDelete: q('DELETE FROM mutes WHERE room_id = ? AND voter_id = ? AND target = ?'),
     messageTrim: q(`DELETE FROM messages WHERE room_id = ? AND stream = ? AND id NOT IN
       (SELECT id FROM messages WHERE room_id = ? AND stream = ? ORDER BY id DESC LIMIT ?)`),
     ballotInsert: q('INSERT OR IGNORE INTO ballots (room_id, voter_id, entry, current, seated) VALUES (?, ?, ?, ?, ?)'),
@@ -167,9 +181,14 @@ function open(dir) {
     },
     saveMessage(roomId, stream, msg, keep) {
       write('message', () => {
-        st.messageInsert.run(msg.id, roomId, stream, msg.role, msg.name, msg.text, msg.ts);
+        st.messageInsert.run(msg.id, roomId, stream, msg.role, msg.name, msg.text, msg.ts, msg.clientId || null);
         st.messageTrim.run(roomId, stream, roomId, stream, keep);
       });
+    },
+    saveMute(roomId, voterId, target, on) {
+      write('mute', () => (on
+        ? st.muteInsert.run(roomId, voterId, target)
+        : st.muteDelete.run(roomId, voterId, target)));
     },
     saveBallot(roomId, voterId, b) {
       write('ballot', () => st.ballotInsert.run(roomId, voterId, b.entry, b.current, b.seated ? 1 : 0));
@@ -220,6 +239,7 @@ function open(dir) {
         ballots: all('SELECT * FROM ballots'),
         questions: all('SELECT * FROM questions ORDER BY id'),
         votes: all('SELECT * FROM votes'),
+        mutes: all('SELECT * FROM mutes'),
         challenges: all('SELECT * FROM challenges ORDER BY created_at'),
         maxId: Math.max(
           db.prepare('SELECT COALESCE(MAX(id), 0) AS n FROM messages').get().n,

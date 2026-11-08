@@ -886,6 +886,86 @@ async function runHandles() {
   [nad, rom, imp, vot, nad2].forEach((c) => c.close());
   await wait(150);
 
+  await runModeration();
+}
+
+// ==========================================================================
+// Rate limits, the mute, and the names nobody gets
+// ==========================================================================
+
+async function runModeration() {
+  const deb = makeClient('mdeb');
+  const opp = makeClient('mopp');
+  const loud = makeClient('mloud');
+  const calm = makeClient('mcalm');
+  await Promise.all([deb.open, opp.open, loud.open, calm.open]);
+
+  // --- names ------------------------------------------------------------------
+  const { roomId } = await deb.emit('room:create', { topic: 'Moderation is censorship' });
+  const asAdmin = await loud.emit('room:join', { roomId, name: 'Admin', stance: 'con', voterId: 'm-loud' });
+  check('a name that impersonates the site is refused at the door', !!asAdmin.error, JSON.stringify(asAdmin));
+  const asSlur = await loud.emit('room:join', { roomId, name: 'N 1 g g 3 r', stance: 'con', voterId: 'm-loud' });
+  check('a slur is refused however it is spelled', !!asSlur.error, JSON.stringify(asSlur));
+  const asMatt = await loud.emit('room:join', { roomId, name: 'Administrator Matt', stance: 'con', voterId: 'm-loud' });
+  check('an ordinary name that merely contains a reserved word gets in', !asMatt.error, JSON.stringify(asMatt));
+
+  await deb.emit('room:join', { roomId, name: 'Dee', stance: 'pro', voterId: 'm-deb' });
+  await opp.emit('room:join', { roomId, name: 'Oz', stance: 'con', voterId: 'm-opp' });
+  await calm.emit('room:join', { roomId, name: 'Cal', stance: 'undecided', voterId: 'm-calm' });
+  const badHandle = await deb.emit('seat:claim', { side: 'pro', handle: 'moderator', secret: 'f6'.repeat(32) });
+  check('a reserved handle is refused', !!badHandle.error && badHandle.error !== 'handle taken',
+    JSON.stringify(badHandle));
+  await deb.emit('seat:claim', { side: 'pro' });
+  await opp.emit('seat:claim', { side: 'con' });
+
+  // --- rate limits ------------------------------------------------------------
+  const burst = [];
+  for (let i = 0; i < 6; i++) burst.push(await loud.emit('audience:message', { text: `spam ${i}` }));
+  check('five sidebar messages in ten seconds go through', burst.slice(0, 5).every((x) => x.ok),
+    JSON.stringify(burst.slice(0, 5)));
+  check('the sixth gets "slow down"', burst[5].error === 'slow down', JSON.stringify(burst[5]));
+  const stillFine = await calm.emit('audience:message', { text: 'I am not spamming' });
+  check('one person\'s limit is not anyone else\'s', !!stillFine.ok);
+
+  const stage = [];
+  for (let i = 0; i < 6; i++) stage.push(await deb.emit('debate:message', { text: `point ${i}` }));
+  check('the stage has its own five', stage.slice(0, 5).every((x) => x.ok) && stage[5].error === 'slow down',
+    JSON.stringify(stage.map((x) => x.error || 'ok')));
+  const otherStream = await deb.emit('audience:message', { text: 'aside' });
+  check('running out on the stage leaves the sidebar alone', !!otherStream.ok, JSON.stringify(otherStream));
+  const emptyFree = [];
+  for (let i = 0; i < 3; i++) emptyFree.push(await calm.emit('audience:message', { text: '   ' }));
+  const afterEmpty = await calm.emit('audience:message', { text: 'real one' });
+  check('a rejected message does not spend the limit', !!afterEmpty.ok, JSON.stringify(afterEmpty));
+
+  // --- the mute ---------------------------------------------------------------
+  await wait(80);
+  const lines = deb.got('audience:message');
+  const loudLine = lines.find((m) => m.name === 'Administrator Matt');
+  check('every sidebar line says who said it, without their ballot id',
+    loudLine && /^[0-9a-f]{12}$/.test(loudLine.clientId) && !JSON.stringify(lines).includes('m-loud'),
+    JSON.stringify(loudLine));
+  const fromFloor = await calm.emit('audience:mute', { clientId: loudLine.clientId });
+  check('the audience cannot mute anyone', !!fromFloor.error);
+  const muted = await deb.emit('audience:mute', { clientId: loudLine.clientId });
+  check('a debater can mute an audience member for themselves',
+    muted.ok && muted.muted.includes(loudLine.clientId), JSON.stringify(muted));
+  const self = await deb.emit('audience:mute', { clientId: lines.find((m) => m.name === 'Dee').clientId });
+  check('a debater cannot mute themselves', !!self.error);
+  await wait(80);
+  check('the muted person is not told', !loud.got('audience:mute').length && !loud.got('room:mute').length);
+  const rejoin = await deb.emit('room:join', { roomId, name: 'Dee', stance: 'pro', voterId: 'm-deb' });
+  check('the mute list comes back in the join ack', rejoin.muted && rejoin.muted.includes(loudLine.clientId),
+    JSON.stringify(rejoin.muted));
+  const other = await calm.emit('room:join', { roomId, name: 'Cal', stance: 'undecided', voterId: 'm-calm' });
+  check('a mute is private to the debater who set it', other.muted && other.muted.length === 0);
+  await deb.emit('seat:claim', { side: 'pro' }); // rejoining stood them down
+  const unmuted = await deb.emit('audience:mute', { clientId: loudLine.clientId, mute: false });
+  check('a mute can be lifted', unmuted.ok && unmuted.muted.length === 0, JSON.stringify(unmuted));
+
+  [deb, opp, loud, calm].forEach((c) => c.close());
+  await wait(150);
+
   await runChallenges();
 }
 
@@ -1054,9 +1134,11 @@ async function runRestart() {
     const lastId = p.got('debate:message').slice(-1)[0].id;
     void m1;
 
-    [p, c, w, poster].forEach((x) => x.close());
+    // Killed under connected clients, the way a crash or a deploy does it. Closing
+    // the clients first would be every debater leaving, which frees the seats.
     proc.kill('SIGKILL');
     await new Promise((r) => proc.once('exit', r));
+    [p, c, w, poster].forEach((x) => x.close());
     proc = await spawnServer(port, dir, { DEBATE_TURN_SECONDS: '30' });
 
     const back = makeClient('rback', url);

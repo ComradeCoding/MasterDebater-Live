@@ -712,6 +712,29 @@
   .chatline .n.pro { color: var(--pro); }
   .chatline .n.con { color: var(--con); }
   .chatline .n.audience { color: var(--neon); }
+  /* The mute control exists on every line and shows only to the debaters. */
+  .chatline button.mute {
+    display: none;
+    float: right;
+    margin-left: 8px;
+    padding: 1px 6px;
+    font-family: var(--data);
+    font-size: 9px;
+    letter-spacing: .1em;
+    border-width: 1px;
+    border-color: var(--rule-hot);
+    color: var(--dim);
+  }
+  body.seated .chatline button.mute { display: inline-block; }
+  .side .head button.unmute {
+    padding: 2px 7px;
+    font-family: var(--data);
+    font-size: 9px;
+    letter-spacing: .1em;
+    border-width: 1px;
+    border-color: var(--rule-hot);
+    color: var(--muted);
+  }
 
   .side .sysline {
     display: block;
@@ -1247,6 +1270,7 @@
   <div class="side">
     <div class="head">
       <span>Audience</span>
+      <button class="unmute" id="unmuteAll" hidden></button>
       <span class="count" id="audCount">· 0 watching</span>
     </div>
     <!-- Questions for both sides, open during the rebuttals. -->
@@ -1769,6 +1793,9 @@
     $('leaveBtn').hidden = false;
     $('headerTopic').textContent = res.room.topic;
 
+    myClientId = res.myClientId || null;
+    mutedIds = {};
+    (res.muted || []).forEach(function (id) { mutedIds[id] = true; });
     $('debateMsgs').innerHTML = '';
     $('audMsgs').innerHTML = '';
     $('typing').textContent = '';
@@ -1795,6 +1822,9 @@
     lean = { pro: 0, con: 0, undecided: 0 };
     pendingRoomId = null;
     concluded = false;
+    mutedIds = {};
+    myClientId = null;
+    document.body.classList.remove('seated');
     disarmCallIt();
     stopTick();
     turn = { started: false };
@@ -1864,6 +1894,8 @@
     });
 
     var seated = myRole === 'pro' || myRole === 'con';
+    document.body.classList.toggle('seated', seated && !concluded);
+    renderMuteCount();
 
     // Once it is settled the record is the only control on the stage. Leaving a
     // live composer up would offer an action the server now refuses.
@@ -2319,13 +2351,62 @@
   socket.on('audience:message', addAudienceMsg);
   socket.on('audience:system', function (m) { addSystem($('audMsgs'), m.text); });
 
+  // Every line carries who said it, as a per-room id, so a debater can mute
+  // them. The mute button is in every line but only shows for the two seated
+  // debaters (body.seated), so taking a seat mid-debate needs no repaint.
   function addAudienceMsg(m) {
     var role = m.role === 'pro' || m.role === 'con' ? m.role : 'audience';
     var el = document.createElement('div');
     el.className = 'chatline';
     el.innerHTML = '<span class="n ' + role + '">' + esc(m.name) + ':</span> ' + esc(m.text);
+    if (m.clientId) {
+      el.setAttribute('data-cid', m.clientId);
+      el.hidden = !!mutedIds[m.clientId];
+      if (m.clientId !== myClientId) {
+        var mute = document.createElement('button');
+        mute.className = 'mute';
+        mute.textContent = 'mute';
+        mute.setAttribute('aria-label', 'Mute ' + m.name + ' for yourself');
+        mute.onclick = function () { setMute(m.clientId, true, m.name); };
+        el.appendChild(mute);
+      }
+    }
     appendScroll($('audMsgs'), el);
   }
+
+  // ----------------------------------------------------------------- mute --
+  // For yourself only. The server still sends their lines; this browser stops
+  // showing them. Nobody is told, including the person muted.
+  var mutedIds = {};
+  var myClientId = null;
+
+  function setMute(cid, on, name) {
+    socket.emit('audience:mute', { clientId: cid, mute: on }, function (res) {
+      if (res.error) return toast(res.error);
+      applyMutes(res.muted);
+      if (on) toast('Muted ' + (name || 'them') + '. Only you stop seeing them.');
+    });
+  }
+
+  function applyMutes(list) {
+    mutedIds = {};
+    (list || []).forEach(function (id) { mutedIds[id] = true; });
+    Array.prototype.forEach.call($('audMsgs').querySelectorAll('.chatline[data-cid]'), function (el) {
+      el.hidden = !!mutedIds[el.getAttribute('data-cid')];
+    });
+    renderMuteCount();
+  }
+
+  function renderMuteCount() {
+    var n = Object.keys(mutedIds).length;
+    var seated = myRole === 'pro' || myRole === 'con';
+    $('unmuteAll').hidden = !n || !seated;
+    $('unmuteAll').textContent = n + ' muted · show all';
+  }
+
+  $('unmuteAll').onclick = function () {
+    Object.keys(mutedIds).forEach(function (cid) { setMute(cid, false); });
+  };
 
   function sendAudience() {
     var input = $('audInput');

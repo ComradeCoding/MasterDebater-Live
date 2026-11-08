@@ -86,6 +86,15 @@ down.' }` and an unacked one is dropped. A client that keeps pushing through
 200 refusals in a row is disconnected. It is sized so no person typing can hit
 it and a script flooding broadcasts runs dry within two seconds.
 
+That bucket guards the transport. A second, smaller one guards the
+conversation: five messages per ten seconds on each stream, the stage and the
+sidebar separately, per connection. Over that the reply is `{ error: 'slow
+down' }`. Five in ten seconds is faster than anyone argues and slower than
+anyone spams, and keeping the streams apart means a debater who has been
+hammering the stage can still answer someone in the sidebar. Only a message
+that was actually going to be posted spends a token; an empty one that was
+going to be refused anyway is free.
+
 ### Surviving a restart
 
 Live rooms used to be memory only, so every redeploy wiped every debate in
@@ -191,6 +200,7 @@ Client to server: `{ id?, type, data }`. When `id` is present the server replies
 | `debate:pass` | none | `{ ok }`, only the side holding the floor |
 | `debate:typing` | `{ isTyping }` | `{ ok }`, relayed from debaters only |
 | `room:rematch` | none | `{ roomId, join }`, the two who argued a settled debate only |
+| `audience:mute` | `{ clientId, mute? }` | `{ ok, muted }`, seated debaters only; `mute: false` lifts it |
 
 Server pushes: `lobby:rooms` (live room summaries), `lobby:results` (settled
 debates), `room:state` (one summary), `debate:message`, `audience:message`,
@@ -596,6 +606,31 @@ therefore being scaled up rather than down. Neither has anything left to give
 without visibly losing frames or colour, and the tests hold the icons to a byte
 budget so a full-size file dropped back in fails loudly.
 
+## The mute and the denylist
+
+A debater on stage gets every sidebar line in their peripheral vision, and a
+heckler who is only there to put them off can do it all debate long. So either
+debater can mute an audience member, for themselves only. Each sidebar line
+carries `clientId`, a per-room public id hashed from the speaker's browser id,
+so a mute survives the muted person reconnecting and nobody can work back from
+it to the ballot id it came from. The server keeps each debater's mute list
+(it persists with the room), sends it back in every join ack, and goes on
+sending the muted person's lines; the debater's own browser does the hiding.
+Nobody else's view changes and the muted person is never told, because a mute
+that announced itself would be a prize. The audience cannot mute anyone, and
+nobody can mute themselves. `mute: false` lifts one, and the sidebar offers
+that as a single "show all".
+
+Names get a denylist, kept short because a long one mostly catches the
+innocent. Two kinds of entry. A name that is entirely a claim to be the site or
+its staff (`admin`, `moderator`, `system`, the site's own names) is refused,
+but "Administrator Matt" is fine. A handful of slurs are refused anywhere in a
+name, after folding case, accents, spacing and the usual digit-for-letter
+swaps, so spacing a word out or writing it in numbers does not get it through.
+Words that commonly sit inside ordinary names were left off the list on
+purpose. It is checked on the server, on join, on the board and on handle
+claims, before anything else changes.
+
 ## Handles
 
 Not accounts. A display name is whatever you typed into the join box this
@@ -775,7 +810,7 @@ is a name and a boolean, and the runner is forty lines at the top of the file.
 Node 22 ships a global `WebSocket` client, so the tests speak to the server
 through the same API a browser uses.
 
-244 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so an eight-turn
+262 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so an eight-turn
 format runs in eight seconds rather than seventeen minutes.
 
 The first 40 cover the live room: lobby push on connect, topic
@@ -839,6 +874,16 @@ what they argued, side and swing and result from their side, a running total,
 the other side of the same debate reading as a win, no script, 404s for an
 unclaimed handle and a traversal attempt, no key on the page, and the
 permalink linking each handle.
+
+The next 18 cover moderation: an impersonating name and a spaced-out, numbered
+slur refused at the door while an ordinary name containing a reserved word gets
+in, a reserved handle refused, five sidebar messages through and the sixth
+told "slow down", one person's limit not touching anyone else, the stage with
+its own five, the sidebar unaffected when the stage runs out, a rejected
+message spending nothing, every sidebar line carrying a speaker id and no
+ballot id, the audience unable to mute, a debater muting for themselves but
+not themselves, the muted person not told, the list returning in the join ack,
+another member's list staying empty, and a mute lifted.
 
 The next 25 cover the challenge board: it is pushed on connect, a challenge
 needs a motion and a side, it goes up on every board without the poster's
@@ -928,7 +973,16 @@ as separate ballots, since one browser profile is deliberately one voter.
   still one process's memory, so this does not scale past one server. Two
   servers would need the database to be the working copy, read on every
   message, which is a different design rather than a bigger one.
-- **No moderation.** Anonymous display names, no reporting, no blocking.
+- **Moderation is thin, on purpose.** What exists: the transport flood guard
+  and a five-in-ten-seconds limit on each stream; a short server-side denylist
+  of names that impersonate the site and of slurs however they are spelled,
+  checked on join, on the board and on handles; and a mute any debater can set
+  on any audience member, for themselves only, kept across reconnects and
+  restarts and invisible to the person muted. What does not: no reporting, no
+  bans, no moderators, no filtering of what anyone says, no way for the
+  audience to mute anyone, and nothing that survives a person clearing storage
+  and coming back. Every one of those needs an account to hang off, which is
+  the same wall the ballot and the handle hit.
 - **Archive growth.** Unbounded on disk, by design. There is no pruning job and
   deliberately so.
 
