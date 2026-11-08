@@ -92,7 +92,10 @@ function read(file) {
   return { w, h, rgba };
 }
 
-function write(file, w, h, rgba) {
+// Encoding is split from writing because the share card for a settled debate
+// is drawn per request and goes straight onto the wire, never to disk. That
+// makes this the one file in tools/ the server loads.
+function encode(w, h, rgba) {
   const stride = w * 4;
   const raw = Buffer.alloc(h * (stride + 1));
   for (let y = 0; y < h; y++) {
@@ -110,8 +113,13 @@ function write(file, w, h, rgba) {
     chunk('IDAT', zlib.deflateSync(raw, { level: 9 })),
     chunk('IEND', Buffer.alloc(0)),
   ]);
+  return out;
+}
+
+function write(file, w, h, rgba) {
+  const out = encode(w, h, rgba);
   fs.writeFileSync(file, out);
   return out.length;
 }
 
-module.exports = { read, write };
+module.exports = { read, write, encode };

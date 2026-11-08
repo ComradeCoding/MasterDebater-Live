@@ -430,6 +430,28 @@ async function runVerdict() {
   check('names and messages are escaped on the permalink',
     !page.body.includes('<script>alert'), 'raw markup reached the page');
 
+  // --- the share card --------------------------------------------------------
+  const cardRes = await fetch(`${HTTP_ORIGIN}/d/${roomId}/card.png`);
+  const cardBytes = Buffer.from(await cardRes.arrayBuffer());
+  check('the share card serves for a real debate',
+    cardRes.status === 200 && cardRes.headers.get('content-type') === 'image/png',
+    `${cardRes.status} ${cardRes.headers.get('content-type')}`);
+  check('the share card is a real 1200x630 PNG',
+    cardBytes.subarray(1, 4).toString() === 'PNG' &&
+    cardBytes.readUInt32BE(16) === 1200 && cardBytes.readUInt32BE(20) === 630,
+    cardBytes.subarray(0, 24).toString('hex'));
+  check('the share card runs under the same no-script policy',
+    /script-src 'none'/.test(cardRes.headers.get('content-security-policy') || ''));
+  const noCard = await fetch(`${HTTP_ORIGIN}/d/000000/card.png`);
+  check('an unknown debate has no share card', noCard.status === 404, String(noCard.status));
+  const badCard = await fetch(`${HTTP_ORIGIN}/d/..%2Fserver.js/card.png`);
+  check('a traversal attempt on the card is rejected', badCard.status === 404, String(badCard.status));
+  check('the permalink names the card as its preview image',
+    page.body.includes(`/d/${roomId}/card.png"`) &&
+    /<meta property="og:image" content="https?:\/\/[^"]+\/card\.png">/.test(page.body));
+  check('the permalink asks for a large twitter card',
+    page.body.includes('<meta name="twitter:card" content="summary_large_image">'));
+
   [pro, con, v1, v2, v3, v4].forEach((c) => c.close());
   await wait(150);
 

@@ -100,6 +100,15 @@ function render(record, origin) {
 <meta property="og:title" content="${esc(record.topic)}">
 <meta property="og:description" content="${esc(summary)}">
 <meta property="og:url" content="${esc(url)}">
+<meta property="og:image" content="${esc(url)}/card.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="${esc(`${record.topic}. ${headline}`)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${esc(record.topic)}">
+<meta name="twitter:description" content="${esc(summary)}">
+<meta name="twitter:image" content="${esc(url)}/card.png">
 <link rel="canonical" href="${esc(url)}">
 <style>
   :root {

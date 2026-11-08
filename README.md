@@ -43,14 +43,15 @@ debate-live/
   verdict.js          # verdict math, pure functions
   archive.js          # concluded debates on disk
   resultpage.js       # the permalink page, server-rendered
+  card.js             # the permalink's share card, drawn as a PNG
   public/index.html   # the entire frontend, markup, CSS and JS
   homesite/           # the ComradeCoding homepage, served on its own hosts
-  tools/              # image utilities, run by hand, never at serve time
+  tools/              # image codecs and utilities, mostly run by hand
   test-clients.js     # protocol-level end-to-end tests
   data/               # archived debates, one JSON file each (gitignored)
 ```
 
-Four modules sit outside `server.js`. Three are about the record a debate leaves
+Five modules sit outside `server.js`. Four are about the record a debate leaves
 behind, which outlives the process in a way a live room does not. `format.js` is
 separate for a different reason: it is pure data and pure functions, while the
 running clock is state, so the schedule and the timer live apart.
@@ -293,6 +294,33 @@ against further down.
 Archived records store raw text exactly as the live server does. Every name,
 topic and message is escaped by `resultpage.js` at render time.
 
+### The share card
+
+Most people meet a permalink as a preview in somebody else's feed before they
+ever open it, so the preview is the page's real front door. `/d/<id>/card.png`
+draws it: the masthead, the motion, both names on their spot-ink pills, the
+swing figure large and tilted in a box with the page's hard shadow, and the
+opening and closing bars on one scale. The permalink names it as `og:image`
+and asks for a `summary_large_image` Twitter card.
+
+It is a PNG because the platforms that draw previews take PNG and JPEG and not
+SVG, so an SVG card would have been tidier to write and shown nowhere. That
+means real pixels with no canvas and no font engine. `card.js` draws onto a
+plain RGBA buffer and hands it to the PNG encoder in `tools/png.js`, which
+makes that the one tool the server loads. The text is a 5x7 bitmap font drawn
+taller than it is wide, so it condenses the way Bahnschrift does at 75%; blocky
+capitals are what a photocopied flyer would have anyway. Anything the font
+lacks is folded to the nearest thing it has, so an accented name loses its
+accent rather than turning into noise. The tilt is the page's one rotation,
+sampled sixteen times a pixel so its edges stay smooth.
+
+The card hangs off the permalink's own route, so the id goes through the same
+six-hex-char check before anything is read, and an unknown id is the same 404.
+It is served under the same `script-src 'none'` policy. A record never changes
+once written, so neither does its card: it is cached for a day downstream and
+kept in a small in-memory cache here, so a link doing the rounds does not
+redraw the same pixels for every crawler that asks.
+
 Files are never deleted. An archive that quietly dropped old debates would break
 exactly the permalinks it exists to keep, so disk grows without limit by design.
 Only the in-memory lobby index is capped, at 200.
@@ -389,7 +417,8 @@ means deleting its JSON file on the volume by hand.
 `tools/` holds three utilities and the two codecs they share: `png.js` reads and
 writes 8-bit RGBA PNGs, and `gif.js` reads and writes animated GIFs, LZW and
 all. None of them runs at build time; the images in `homesite/` are already
-processed. They are kept because every one of these problems recurs each time
+processed. The PNG encoder is the one exception at serve time, because the share
+card is drawn per request. They are kept because every one of these problems recurs each time
 an image is added.
 
 `dechecker.js` cuts a baked-in transparency checkerboard out of a PNG. Stock
@@ -537,7 +566,7 @@ is a name and a boolean, and the runner is forty lines at the top of the file.
 Node 22 ships a global `WebSocket` client, so the tests speak to the server
 through the same API a browser uses.
 
-137 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so a six-turn
+144 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so a six-turn
 format runs in six seconds rather than thirteen minutes.
 
 The first 40 cover the live room: lobby push on connect, topic
@@ -550,7 +579,7 @@ histories and seat state, server-side truncation of a 5000-character message to
 1000, raw storage of markup, the lobby listing, seat release, and a debater's
 disconnect freeing their seat.
 
-The next 31 cover the verdict and the record: an entry stance recorded at
+The next 38 cover the verdict and the record: an entry stance recorded at
 join and the fact that re-joining cannot rewrite it, the undecided count in the
 live tally, all four conclusion guards, a hand-computed verdict checked figure by
 figure (panel, opening tally, closing tally, swing, winner, floor-crossings), a
@@ -560,7 +589,9 @@ settled debate refusing re-entry and pointing at its permalink, the settled list
 being pushed and the room dropping off the live floor, and then the permalink
 itself: it serves the record, states the verdict, carries the transcript, runs no
 script, 404s on an unknown id, rejects a traversal attempt in the id, and renders
-stored markup inert.
+stored markup inert. Its share card serves as a real 1200x630 PNG under the same
+policy, 404s on an unknown id or a traversal attempt, and is named by the page's
+`og:image` and large Twitter card tags.
 
 The next 23 cover the format: a room starting with no format running, the
 audience being unable to call it to order, the guard on an unfilled seat, the

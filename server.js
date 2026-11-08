@@ -29,6 +29,7 @@ const path = require('path');
 const { computeVerdict, verdictLine } = require('./verdict');
 const archive = require('./archive');
 const resultpage = require('./resultpage');
+const card = require('./card');
 const format = require('./format');
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -1066,8 +1067,34 @@ const server = http.createServer((req, res) => {
   // 6-hex-char room-id shape before it reaches the filesystem, so `..` and
   // friends are rejected as "no such debate" rather than defended against.
   if (urlPath.startsWith('/d/')) {
-    const id = urlPath.slice(3);
+    let id = urlPath.slice(3);
+    // The share card hangs off the permalink it previews, so it inherits the
+    // same id check and the same "no such debate" for anything else.
+    const wantsCard = id.endsWith('/card.png');
+    if (wantsCard) id = id.slice(0, -'/card.png'.length);
     const record = archive.isValidId(id) ? archive.load(id) : null;
+    if (wantsCard) {
+      if (!record) {
+        res.writeHead(404, { ...securityHeaders("'none'"), 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('No such debate');
+      }
+      let png;
+      try {
+        png = card.cardFor(record);
+      } catch (err) {
+        console.error('card failed:', err);
+        res.writeHead(500, { ...securityHeaders("'none'"), 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('Could not draw the card');
+      }
+      res.writeHead(200, {
+        ...securityHeaders("'none'"),
+        // A record never changes once written, so neither does its card.
+        'Cache-Control': 'public, max-age=86400',
+        'Content-Type': 'image/png',
+        'Content-Length': png.length,
+      });
+      return res.end(req.method === 'HEAD' ? undefined : png);
+    }
     if (!record) {
       res.writeHead(404, { ...securityHeaders("'none'"), 'Content-Type': 'text/html; charset=utf-8' });
       return res.end('<!DOCTYPE html><meta charset="utf-8"><title>No such debate</title>' +
