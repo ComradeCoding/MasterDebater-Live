@@ -10,12 +10,12 @@
 //
 // Layout of this file:
 //   1. WebSocket transport   (RFC 6455 handshake + framing)
-//   2. Store                 (in-memory rooms; the only place state lives)
+//   2. Store                 (rooms in memory, written through to SQLite)
 //   3. Handlers              (protocol logic; talks to the store, not to sockets)
-//   4. HTTP + wiring         (static serving, upgrade, heartbeat)
+//   4. HTTP + wiring         (static serving, upgrade, heartbeat, restore)
 //
-// The handler layer only touches `store` and the broadcast helpers, so swapping
-// the Map-backed store for Postgres/SQLite means rewriting section 2 alone.
+// The handler layer only touches `store` and the broadcast helpers. Changes to
+// store objects go through store methods, so the durable copy sees every one.
 
 const http = require('http');
 const crypto = require('crypto');
@@ -32,6 +32,7 @@ const resultpage = require('./resultpage');
 const card = require('./card');
 const archivepage = require('./archivepage');
 const format = require('./format');
+const liveDb = require('./db');
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -285,23 +286,60 @@ const CHALLENGE_TTL = Number(process.env.CHALLENGE_TTL_MS) || 24 * 60 * 60 * 100
 const CHALLENGE_ORPHAN_TTL = Number(process.env.CHALLENGE_ORPHAN_MS) || EMPTY_ROOM_TTL;
 const MAX_CHALLENGES = 100;
 
+// The store keeps its objects in memory, because handlers read them on every
+// message and a room also holds sockets and timers. Every change is written
+// through to SQLite as it is made, and SQLite is only ever read at boot. See
+// db.js and README > Architecture.
+const durable = liveDb.open(archive.DIR);
+
 const store = (() => {
   const rooms = new Map(); // roomId -> room
   const challenges = new Map(); // challengeId -> challenge, oldest first
   let nextMessageId = 1;
 
   const newRoomId = () => crypto.randomBytes(3).toString('hex');
+  const blankTurn = () =>
+    ({ index: -1, endsAt: 0, remainingMs: 0, paused: false, pausedReason: null, over: false });
 
-  const handles = new Map(); // handle -> { handle, secretHash, createdAt }
+  function blankRoom(id, topic, createdAt) {
+    return {
+      id,
+      topic,
+      createdAt,
+      status: 'live', // 'live' | 'concluded'
+      result: null,
+      // A seat is { clientId, name, handle, voterId }. After a restart the
+      // clientId is null: the seat is held for that voterId's browser until it
+      // comes back or the hold runs out. `voterId` never leaves the server.
+      seats: { pro: null, con: null },
+      debateMessages: [],
+      audienceMessages: [],
+      members: new Set(),
+      // voterId -> { entry, current, seated }. Keyed by a browser-held id
+      // rather than by connection, so a reconnect resumes the same ballot
+      // instead of filing a second one with a post-persuasion "entry".
+      ballots: new Map(),
+      // The floor. index -1 means the format has not been started and the
+      // stage is still a free-for-all, which is what a room is before anyone
+      // calls it to order.
+      turn: blankTurn(),
+      turnTimer: null,
+      reapTimer: null,
+      // The floor's questions, and the one pinned to the stage once the
+      // Questions round opens. Votes are keyed by ballot id, like ballots.
+      questions: [],
+      pinnedQuestionId: null,
+    };
+  }
 
   return {
     // --- handles --------------------------------------------------------------
     // A handle is bound to the hash of a browser-held secret the first time it
-    // is claimed. The secret itself is never stored.
-    getHandle(handle) { return handles.get(handle) || null; },
+    // is claimed. The secret itself is never stored, here or on disk.
+    getHandle(handle) { return durable.getHandle(handle); },
     bindHandle(handle, secretHash) {
       const h = { handle, secretHash, createdAt: Date.now() };
-      handles.set(handle, h);
+      durable.saveHandle(h);
       return h;
     },
 
@@ -321,6 +359,7 @@ const store = (() => {
         orphanTimer: null,
       };
       challenges.set(id, ch);
+      durable.saveChallenge(ch);
       return ch;
     },
     getChallenge(id) { return challenges.get(id) || null; },
@@ -333,6 +372,7 @@ const store = (() => {
       if (ch.expiryTimer) clearTimeout(ch.expiryTimer);
       if (ch.orphanTimer) clearTimeout(ch.orphanTimer);
       challenges.delete(ch.id);
+      durable.deleteChallenge(ch.id);
     },
     // One timer per challenge, armed once, the same shape as the turn timer.
     armChallengeExpiry(ch, onExpire) {
@@ -365,32 +405,9 @@ const store = (() => {
     createRoom(topic) {
       let id;
       do { id = newRoomId(); } while (rooms.has(id));
-      const room = {
-        id,
-        topic,
-        createdAt: Date.now(),
-        status: 'live', // 'live' | 'concluded'
-        result: null,
-        seats: { pro: null, con: null },
-        debateMessages: [],
-        audienceMessages: [],
-        members: new Set(),
-        // voterId -> { entry, current, seated }. Keyed by a browser-held id
-        // rather than by connection, so a reconnect resumes the same ballot
-        // instead of filing a second one with a post-persuasion "entry".
-        ballots: new Map(),
-        // The floor. index -1 means the format has not been started and the
-        // stage is still a free-for-all, which is what a room is before anyone
-        // calls it to order.
-        turn: { index: -1, endsAt: 0, remainingMs: 0, paused: false, pausedReason: null, over: false },
-        turnTimer: null,
-        reapTimer: null,
-        // The floor's questions, and the one pinned to the stage once the
-        // Questions round opens. Votes are keyed by ballot id, like ballots.
-        questions: [],
-        pinnedQuestionId: null,
-      };
+      const room = blankRoom(id, topic, Date.now());
       rooms.set(id, room);
+      durable.saveRoom(room);
       return room;
     },
 
@@ -405,16 +422,30 @@ const store = (() => {
     removeMember(room, client) { room.members.delete(client); },
 
     takeSeat(room, side, client) {
-      room.seats[side] = { clientId: client.id, name: client.name, handle: client.handle || null };
+      room.seats[side] = {
+        clientId: client.id,
+        name: client.name,
+        handle: client.handle || null,
+        voterId: client.voterId || null,
+      };
+      if (room.status === 'live') durable.saveSeat(room.id, side, room.seats[side]);
     },
 
-    freeSeat(room, side) { room.seats[side] = null; },
+    freeSeat(room, side) {
+      room.seats[side] = null;
+      if (room.status === 'live') durable.saveSeat(room.id, side, null);
+    },
+
+    // A seat whose holder dropped with the server, waiting for that browser.
+    isHeld(seat) { return !!seat && seat.clientId == null; },
+    heldFor(seat, voterId) { return this.isHeld(seat) && !!voterId && seat.voterId === voterId; },
 
     appendMessage(room, stream, msg) {
       const list = stream === 'debate' ? room.debateMessages : room.audienceMessages;
       msg.id = nextMessageId++;
       list.push(msg);
       while (list.length > MAX_HISTORY) list.shift();
+      durable.saveMessage(room.id, stream, msg, MAX_HISTORY);
       return msg;
     },
 
@@ -427,13 +458,37 @@ const store = (() => {
       if (room.ballots.size >= MAX_BALLOTS) return null;
       const ballot = { entry, current: entry, seated: false };
       room.ballots.set(voterId, ballot);
+      durable.saveBallot(room.id, voterId, ballot);
       return ballot;
+    },
+
+    // The two ways a ballot changes after it is filed. They used to be plain
+    // assignments in the handlers; a durable store has to see them happen.
+    setLean(room, voterId, side) {
+      const ballot = room.ballots.get(voterId);
+      if (!ballot) return null;
+      ballot.current = side;
+      durable.saveLean(room.id, voterId, side);
+      return ballot;
+    },
+    strikeBallot(room, voterId) {
+      const ballot = room.ballots.get(voterId);
+      if (!ballot) return null;
+      ballot.seated = true;
+      durable.saveSeated(room.id, voterId);
+      return ballot;
+    },
+
+    // The clock code changes `room.turn` in place and calls this after.
+    saveTurn(room) {
+      if (room.status === 'live') durable.saveTurn(room);
     },
 
     // --- the floor's questions ------------------------------------------------
     addQuestion(room, voterId, name, text) {
       const q = { id: nextMessageId++, voterId, name, text, ts: Date.now(), votes: new Set() };
       room.questions.push(q);
+      durable.saveQuestion(room.id, q);
       return q;
     },
     getQuestion(room, id) { return room.questions.find((q) => q.id === id) || null; },
@@ -443,15 +498,25 @@ const store = (() => {
     rankedQuestions(room) {
       return [...room.questions].sort((a, b) => b.votes.size - a.votes.size || a.ts - b.ts);
     },
-    upvote(room, q, voterId) { q.votes.add(voterId); },
-    pinQuestion(room, q) { room.pinnedQuestionId = q ? q.id : null; },
+    upvote(room, q, voterId) {
+      q.votes.add(voterId);
+      durable.saveVote(q.id, voterId);
+    },
+    pinQuestion(room, q) {
+      room.pinnedQuestionId = q ? q.id : null;
+      durable.savePin(room);
+    },
 
     getBallot(room, voterId) { return room.ballots.get(voterId) || null; },
     listBallots(room) { return [...room.ballots.values()]; },
 
+    // A settled debate's permanent copy is its archive file, written before
+    // this is called. The live rows are only for surviving a restart mid-
+    // debate, and a settled debate has nothing left to survive.
     conclude(room, result) {
       room.status = 'concluded';
       room.result = result;
+      durable.deleteRoom(room.id);
       return room;
     },
 
@@ -462,9 +527,94 @@ const store = (() => {
         room.reapTimer = null;
         if (rooms.get(room.id) !== room || room.members.size > 0) return;
         rooms.delete(room.id);
+        durable.deleteRoom(room.id);
         onReap();
       }, EMPTY_ROOM_TTL);
       if (room.reapTimer.unref) room.reapTimer.unref();
+    },
+
+    // --- surviving a restart --------------------------------------------------
+    // How long the server has been gone is unknowable from inside it, so it
+    // writes a heartbeat. A turn that was running when the process died gets
+    // back whatever it had left at the last beat, never the time the server
+    // spent down.
+    heartbeat() {
+      durable.setMeta('alive_at', Date.now());
+      durable.setMeta('next_id', nextMessageId);
+    },
+
+    // Rebuilds every live room and challenge from disk. Each room comes back
+    // with its clock paused and both seats held for whoever sat in them; the
+    // caller adds the system line and the timers, which belong to section 3.
+    restore() {
+      const data = durable.loadAll();
+      nextMessageId = Math.max(nextMessageId, data.maxId + 1);
+      const aliveAt = Number(durable.getMeta('alive_at')) || Date.now();
+      const restored = [];
+
+      for (const row of data.rooms) {
+        const room = blankRoom(row.id, row.topic, row.created_at);
+        try { Object.assign(room.turn, JSON.parse(row.turn)); } catch {}
+        room.pinnedQuestionId = row.pinned_question_id;
+        rooms.set(room.id, room);
+        restored.push(room);
+      }
+      const byId = (id) => rooms.get(id);
+
+      for (const s of data.seats) {
+        const room = byId(s.room_id);
+        if (room) room.seats[s.side] = { clientId: null, name: s.name, handle: s.handle, voterId: s.voter_id };
+      }
+      for (const m of data.messages) {
+        const room = byId(m.room_id);
+        if (!room) continue;
+        (m.stream === 'debate' ? room.debateMessages : room.audienceMessages)
+          .push({ id: m.id, role: m.role, name: m.name, text: m.text, ts: m.ts });
+      }
+      for (const b of data.ballots) {
+        const room = byId(b.room_id);
+        if (room) room.ballots.set(b.voter_id, { entry: b.entry, current: b.current, seated: !!b.seated });
+      }
+      const questions = new Map();
+      for (const qr of data.questions) {
+        const room = byId(qr.room_id);
+        if (!room) continue;
+        const q = { id: qr.id, voterId: qr.voter_id, name: qr.name, text: qr.text, ts: qr.ts, votes: new Set() };
+        room.questions.push(q);
+        questions.set(q.id, q);
+      }
+      for (const v of data.votes) {
+        const q = questions.get(v.question_id);
+        if (q) q.votes.add(v.voter_id);
+      }
+
+      for (const room of restored) {
+        const t = room.turn;
+        if (t.index >= 0 && !t.over) {
+          if (!t.paused) {
+            const turnMs = (format.turnAt(t.index) || { seconds: 0 }).seconds * 1000;
+            t.remainingMs = Math.max(0, Math.min(turnMs, t.endsAt - aliveAt));
+          }
+          t.paused = true;
+          t.pausedReason = 'the server restarted';
+          durable.saveTurn(room);
+        }
+      }
+
+      for (const c of data.challenges) {
+        const ch = {
+          id: c.id, motion: c.motion, side: c.side, name: c.name, key: c.key, handle: c.handle,
+          poster: null, createdAt: c.created_at, expiresAt: c.expires_at,
+          expiryTimer: null, orphanTimer: null,
+        };
+        challenges.set(ch.id, ch);
+      }
+      return { rooms: restored, challenges: this.listChallenges() };
+    },
+
+    shutdown() {
+      this.heartbeat();
+      durable.close();
     },
   };
 })();
@@ -480,6 +630,8 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u20
 const clean = (value, max) =>
   String(value ?? '').replace(CONTROL_CHARS, '').trim().slice(0, max);
 
+const seatPresent = (room, side) => !!room.seats[side] && room.seats[side].clientId != null;
+
 function roomSummary(room) {
   let audienceCount = 0;
   for (const c of room.members) if (c.role === 'audience') audienceCount++;
@@ -494,6 +646,9 @@ function roomSummary(room) {
     conName: room.seats.con ? room.seats.con.name : null,
     proHandle: room.seats.pro ? room.seats.pro.handle : null,
     conHandle: room.seats.con ? room.seats.con.handle : null,
+    // Held after a restart for a debater who has not reconnected yet.
+    proAway: store.isHeld(room.seats.pro),
+    conAway: store.isHeld(room.seats.con),
     audienceCount,
   };
 }
@@ -752,7 +907,7 @@ function enterSeated(room, client, side) {
   client.role = side;
   client.voterId = client.voterId || `anon-${client.id}`;
   const ballot = store.openBallot(room, client.voterId, null);
-  if (ballot) ballot.seated = true;
+  if (ballot) store.strikeBallot(room, client.voterId);
   client.lean = ballot ? ballot.current : null;
   store.addMember(room, client);
   store.takeSeat(room, side, client);
@@ -844,6 +999,7 @@ function beginTurn(room, index) {
   // The floor changing hands clears any stale typing line from the side that
   // just lost it, which would otherwise sit there for its full five seconds.
   broadcastRoom(room, 'debate:typing', { name: '', role: t.side, isTyping: false });
+  store.saveTurn(room);
   publishTurn(room);
   armTurnTimer(room, room.turn.remainingMs);
 }
@@ -860,6 +1016,7 @@ function endFormat(room) {
   clearTurnTimer(room);
   room.turn.index = -1;
   room.turn.over = true;
+  store.saveTurn(room);
   publishTurn(room);
 
   const settled = settleRoom(room, 'The format ran its course. The debate is settled.');
@@ -882,16 +1039,18 @@ function pauseTurn(room, reason) {
   room.turn.remainingMs = Math.max(0, room.turn.endsAt - Date.now());
   room.turn.paused = true;
   room.turn.pausedReason = reason;
+  store.saveTurn(room);
   broadcastRoom(room, 'debate:system', { text: `Clock stopped: ${reason}`, ts: Date.now() });
   publishTurn(room);
 }
 
 function resumeTurn(room) {
   if (room.turn.index < 0 || !room.turn.paused) return;
-  if (!room.seats.pro || !room.seats.con) return; // still a seat short
+  if (!seatPresent(room, 'pro') || !seatPresent(room, 'con')) return; // still a seat short
   room.turn.paused = false;
   room.turn.pausedReason = null;
   room.turn.endsAt = Date.now() + room.turn.remainingMs;
+  store.saveTurn(room);
   broadcastRoom(room, 'debate:system', { text: 'Clock running', ts: Date.now() });
   publishTurn(room);
   armTurnTimer(room, room.turn.remainingMs);
@@ -905,7 +1064,7 @@ function resumeTurn(room) {
 
 function settleRoom(room, systemText) {
   if (room.status === 'concluded') return { error: 'Already settled.' };
-  if (!room.seats.pro || !room.seats.con) {
+  if (!seatPresent(room, 'pro') || !seatPresent(room, 'con')) {
     return { error: 'Both seats have to be filled before this counts.' };
   }
   // A verdict drawn from a one-sided transcript is not a verdict. Without this
@@ -1068,7 +1227,14 @@ const handlers = {
     if (room.status === 'concluded') return { error: 'This debate is settled.' };
     if (side !== 'pro' && side !== 'con') return { error: 'Pick PRO or CON.' };
     if (client.role !== 'audience') return { error: 'You are already seated.' };
-    if (room.seats[side]) return { error: 'Someone beat you to it.' };
+    const seat = room.seats[side];
+    if (seat && !store.heldFor(seat, client.voterId)) {
+      return {
+        error: store.isHeld(seat)
+          ? `That seat is being held for ${seat.name} for a few minutes.`
+          : 'Someone beat you to it.',
+      };
+    }
     // Last, because a claim that binds a handle should be a claim that lands.
     const claimed = claimHandle(handle, secret);
     if (claimed.error) return { error: claimed.error };
@@ -1079,8 +1245,7 @@ const handlers = {
 
     // Struck from the panel for good, even if they step down later. You argued;
     // you do not also get to be evidence that the argument worked.
-    const ballot = store.getBallot(room, client.voterId);
-    if (ballot) ballot.seated = true;
+    store.strikeBallot(room, client.voterId);
 
     // A seat refilling restarts a clock that was stopped waiting for exactly
     // this. The replacement inherits whatever time was left, not a fresh turn.
@@ -1206,8 +1371,7 @@ const handlers = {
     // The ballot is the durable copy: `client.lean` dies with the connection,
     // and a verdict that forgot everyone who closed a tab would be measuring
     // stamina rather than persuasion.
-    const ballot = store.getBallot(room, client.voterId);
-    if (ballot) ballot.current = side;
+    store.setLean(room, client.voterId, side);
 
     // Only a flip gets announced. First picks would be a wall of noise at the
     // top of every debate, whereas someone changing their mind is the point.
@@ -1247,7 +1411,7 @@ const handlers = {
     }
     if (room.turn.index >= 0) return { error: 'Already under way.' };
     if (room.turn.over) return { error: 'The format has already run.' };
-    if (!room.seats.pro || !room.seats.con) {
+    if (!seatPresent(room, 'pro') || !seatPresent(room, 'con')) {
       return { error: 'Both seats have to be filled first.' };
     }
 
@@ -1774,9 +1938,75 @@ if (heartbeat.unref) heartbeat.unref();
 
 const restored = archive.boot();
 
+// ---------------------------------------------------------------------------
+// Coming back from a restart
+// ---------------------------------------------------------------------------
+// Every room that was live comes back with its transcript, ballots, questions
+// and clock, the clock paused. A restart is everybody's connection dropping
+// at once, so the seats are treated the way a dropped connection is, with one
+// difference: they are held for the browser that sat in them, for the same
+// grace period an empty room gets, so a debater whose page reconnects can sit
+// back down before anybody watching can take their place.
+const revived = store.restore();
+for (const room of revived.rooms) {
+  const held = ['pro', 'con'].filter((s) => room.seats[s]).map((s) => room.seats[s].name);
+  store.appendMessage(room, 'debate', {
+    role: 'system',
+    name: '',
+    text: room.turn.index >= 0
+      ? 'The server restarted. The clock is paused until both debaters take their seats again.'
+      : 'The server restarted. Nothing was lost.',
+    ts: Date.now(),
+  });
+  if (held.length) {
+    const t = setTimeout(() => {
+      if (store.getRoom(room.id) !== room || room.status !== 'live') return;
+      let freed = false;
+      for (const side of ['pro', 'con']) {
+        if (store.isHeld(room.seats[side])) { store.freeSeat(room, side); freed = true; }
+      }
+      if (freed) publishRoom(room);
+    }, EMPTY_ROOM_TTL);
+    if (t.unref) t.unref();
+  }
+  store.scheduleReap(room, broadcastLobby);
+}
+// Every poster is offline after a restart. Their challenges stay up for the
+// grace period, marked away, waiting for the page to reconnect and reclaim.
+for (const ch of revived.challenges) {
+  store.armChallengeExpiry(ch, broadcastChallenges);
+  store.orphanChallenge(ch, broadcastChallenges);
+}
+
+// The heartbeat tells the next boot when this process was last alive, which is
+// what a turn that was running at a crash gets measured against.
+store.heartbeat();
+const pulse = setInterval(() => store.heartbeat(), 5000);
+if (pulse.unref) pulse.unref();
+
+// A deploy sends SIGTERM first. Stopping every running clock here records the
+// exact time left, rather than the heartbeat's estimate, and tells the room.
+let stopping = false;
+function shutdown() {
+  if (stopping) return;
+  stopping = true;
+  for (const room of store.listRooms()) {
+    if (room.status === 'live') pauseTurn(room, 'the server is restarting');
+  }
+  store.shutdown();
+  server.close();
+  setTimeout(() => process.exit(0), 200).unref();
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
 server.listen(PORT, () => {
   console.log(`MasterDebater Live running at http://localhost:${PORT}`);
   console.log(`${restored} settled debate${restored === 1 ? '' : 's'} in the archive`);
+  if (revived.rooms.length || revived.challenges.length) {
+    console.log(`${revived.rooms.length} live room${revived.rooms.length === 1 ? '' : 's'} and ` +
+      `${revived.challenges.length} challenge${revived.challenges.length === 1 ? '' : 's'} restored`);
+  }
 });
 
 module.exports = { server };

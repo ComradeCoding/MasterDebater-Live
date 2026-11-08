@@ -56,8 +56,8 @@ function check(name, condition, detail) {
 // A tiny client mirroring the browser's socket wrapper
 // --------------------------------------------------------------------------
 
-function makeClient(label) {
-  const ws = new WebSocket(URL);
+function makeClient(label, url = URL) {
+  const ws = new WebSocket(url);
   const listeners = {};
   const pending = new Map();
   const received = {}; // type -> [data], so tests can assert after the fact
@@ -101,12 +101,16 @@ function makeClient(label) {
 
 async function startServer() {
   if (!SPAWN_SERVER) return null;
+  return spawnServer(TEST_PORT, ARCHIVE_DIR, {
+    DEBATE_TURN_SECONDS: '1',
+    // A day and five minutes, collapsed so the board's timers can be watched.
+    CHALLENGE_TTL_MS: String(CHALLENGE_TTL_MS), CHALLENGE_ORPHAN_MS: String(CHALLENGE_ORPHAN_MS),
+  });
+}
+
+async function spawnServer(port, dir, extra) {
   const proc = spawn(process.execPath, [path.join(__dirname, 'server.js')], {
-    env: {
-      ...process.env, PORT: String(TEST_PORT), ARCHIVE_DIR, DEBATE_TURN_SECONDS: '1',
-      // A day and five minutes, collapsed so the board's timers can be watched.
-      CHALLENGE_TTL_MS: String(CHALLENGE_TTL_MS), CHALLENGE_ORPHAN_MS: String(CHALLENGE_ORPHAN_MS),
-    },
+    env: { ...process.env, PORT: String(port), ARCHIVE_DIR: dir, ...extra },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   await new Promise((resolve, reject) => {
@@ -1011,6 +1015,129 @@ async function runChallenges() {
 }
 
 // ==========================================================================
+// Surviving a restart
+// ==========================================================================
+// A second server on its own port and its own directory, killed outright in
+// the middle of a debate (no chance to shut down cleanly, the worst case) and
+// started again on the same directory.
+
+async function runRestart() {
+  if (!SPAWN_SERVER) return;
+  const port = TEST_PORT + 1;
+  const dir = path.join(require('os').tmpdir(), `debate-test-restart-${process.pid}`);
+  const url = `ws://localhost:${port}`;
+  const http = `http://localhost:${port}`;
+  const KEY = 'd4'.repeat(32);
+  let proc = await spawnServer(port, dir, { DEBATE_TURN_SECONDS: '30' });
+
+  try {
+    const p = makeClient('rpro', url);
+    const c = makeClient('rcon', url);
+    const w = makeClient('rwatch', url);
+    const poster = makeClient('rposter', url);
+    await Promise.all([p.open, c.open, w.open, poster.open]);
+
+    const { roomId } = await p.emit('room:create', { topic: 'Restarts should be survivable' });
+    await p.emit('room:join', { roomId, name: 'Pat', stance: 'pro', voterId: 'r-pro' });
+    await c.emit('room:join', { roomId, name: 'Cas', stance: 'con', voterId: 'r-con' });
+    await w.emit('room:join', { roomId, name: 'Wim', stance: 'con', voterId: 'r-w' });
+    await p.emit('seat:claim', { side: 'pro', handle: 'pat-r', secret: KEY });
+    await c.emit('seat:claim', { side: 'con' });
+    const m1 = await p.emit('debate:message', { text: 'Before the crash.' });
+    await c.emit('debate:message', { text: 'Also before the crash.' });
+    await w.emit('audience:message', { text: 'watching' });
+    await w.emit('audience:lean', { side: 'pro' });
+    await poster.emit('challenge:post',
+      { motion: 'Crashes are character building', side: 'pro', name: 'Ray', voterId: 'r-poster' });
+    await p.emit('debate:start');
+    await wait(200);
+    const lastId = p.got('debate:message').slice(-1)[0].id;
+    void m1;
+
+    [p, c, w, poster].forEach((x) => x.close());
+    proc.kill('SIGKILL');
+    await new Promise((r) => proc.once('exit', r));
+    proc = await spawnServer(port, dir, { DEBATE_TURN_SECONDS: '30' });
+
+    const back = makeClient('rback', url);
+    await back.open;
+    await wait(100);
+    const live = (back.got('lobby:rooms')[0] || []).find((r) => r.id === roomId);
+    check('a live room survives the server being killed', !!live, JSON.stringify(back.got('lobby:rooms')[0]));
+    check('its seats come back held for the people who sat in them',
+      live && live.proName === 'Pat' && live.proAway === true && live.conAway === true && live.proHandle === 'pat-r',
+      JSON.stringify(live));
+    const ch = (back.got('lobby:challenges')[0] || []).find((x) => x.motion === 'Crashes are character building');
+    check('challenges survive, marked away until their poster reconnects', ch && ch.away === true,
+      JSON.stringify(ch));
+
+    // The watcher's browser comes back.
+    const w2 = makeClient('rwatch2', url);
+    await w2.open;
+    const wj = await w2.emit('room:join', { roomId, name: 'Wim', stance: 'undecided', voterId: 'r-w' });
+    check('the transcript survives',
+      wj.debateMessages.some((m) => m.text === 'Before the crash.') &&
+      wj.audienceMessages.some((m) => m.text === 'watching'), JSON.stringify(wj.debateMessages));
+    check('the stage says the server restarted',
+      wj.debateMessages.some((m) => m.role === 'system' && /server restarted/i.test(m.text)));
+    check('ballots survive: the entry stance and the lean both come back',
+      wj.myEntry === 'con' && wj.myLean === 'pro', JSON.stringify([wj.myEntry, wj.myLean]));
+    check('the clock comes back paused, on the same turn, with its time',
+      wj.turn && wj.turn.started && wj.turn.paused && wj.turn.index === 0 &&
+      wj.turn.remainingMs > 25000 && wj.turn.remainingMs <= 30000 &&
+      /restarted/.test(wj.turn.pausedReason || ''), JSON.stringify(wj.turn));
+
+    const snipe = await w2.emit('seat:claim', { side: 'pro' });
+    check('a held seat cannot be taken by someone else', !!snipe.error && /held/.test(snipe.error),
+      JSON.stringify(snipe));
+
+    const p2 = makeClient('rpro2', url);
+    const c2 = makeClient('rcon2', url);
+    await Promise.all([p2.open, c2.open]);
+    await p2.emit('room:join', { roomId, name: 'Pat', stance: 'pro', voterId: 'r-pro' });
+    await c2.emit('room:join', { roomId, name: 'Cas', stance: 'con', voterId: 'r-con' });
+    const reclaim = await p2.emit('seat:claim', { side: 'pro', handle: 'pat-r', secret: KEY });
+    check('the debater\'s own browser gets the held seat back', reclaim.ok, JSON.stringify(reclaim));
+    await c2.emit('seat:claim', { side: 'con' });
+    await wait(100);
+    const running = w2.got('debate:turn').slice(-1)[0];
+    check('the clock runs again once both are back', running && running.paused === false && running.index === 0,
+      JSON.stringify(running));
+    const after = await p2.emit('debate:message', { text: 'After the crash.' });
+    await wait(80);
+    const newest = w2.got('debate:message').slice(-1)[0];
+    check('message ids keep counting up across the restart', !after.error && newest && newest.id > lastId,
+      JSON.stringify([lastId, newest && newest.id]));
+
+    const thief = makeClient('rthief', url);
+    await thief.open;
+    const { roomId: other } = await thief.emit('room:create', { topic: 'Somewhere else' });
+    await thief.emit('room:join', { roomId: other, name: 'Pat', stance: 'pro', voterId: 'r-thief' });
+    const taken = await thief.emit('seat:claim', { side: 'pro', handle: 'pat-r', secret: 'e5'.repeat(32) });
+    check('handles survive the restart', taken.error === 'handle taken', JSON.stringify(taken));
+
+    // Settling deletes the live rows: a third start must not bring it back.
+    await c2.emit('debate:conclude').catch(() => {});
+    await p2.emit('debate:conclude');
+    [back, w2, p2, c2, thief].forEach((x) => x.close());
+    proc.kill('SIGKILL');
+    await new Promise((r) => proc.once('exit', r));
+    proc = await spawnServer(port, dir, { DEBATE_TURN_SECONDS: '30' });
+    const third = makeClient('rthird', url);
+    await third.open;
+    await wait(100);
+    const settledGone = !(third.got('lobby:rooms')[0] || []).some((r) => r.id === roomId);
+    const perma = await fetch(`${http}/d/${roomId}`);
+    check('a settled debate is not restored as live, and its permalink stands',
+      settledGone && perma.status === 200, `${settledGone} ${perma.status}`);
+    third.close();
+  } finally {
+    proc.kill('SIGKILL');
+    try { require('fs').rmSync(dir, { recursive: true, force: true }); } catch {}
+  }
+}
+
+// ==========================================================================
 // The mothership: Host-routed homepage
 // ==========================================================================
 // fetch() refuses to override the Host header, so these checks speak raw
@@ -1274,6 +1401,7 @@ function runGif() {
   try {
     proc = await startServer();
     await run();
+    await runRestart();
   } catch (err) {
     failures++;
     console.log(`FAIL  test harness crashed\n        ${err && err.stack ? err.stack : err}`);

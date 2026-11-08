@@ -41,7 +41,8 @@ debate-live/
   server.js           # static serving + WebSocket + all room/chat logic
   format.js           # rounds, turns and the schedule, pure data
   verdict.js          # verdict math, pure functions
-  archive.js          # concluded debates on disk
+  archive.js          # concluded debates on disk, one JSON file each
+  db.js               # the live store's durable copy, in node:sqlite
   resultpage.js       # the permalink page, server-rendered
   card.js             # the permalink's share card, drawn as a PNG
   archivepage.js      # /archive and /u/<handle>, server-rendered
@@ -49,13 +50,14 @@ debate-live/
   homesite/           # the ComradeCoding homepage, served on its own hosts
   tools/              # image codecs and utilities, mostly run by hand
   test-clients.js     # protocol-level end-to-end tests
-  data/               # archived debates, one JSON file each (gitignored)
+  data/               # archived debates and live.sqlite (gitignored)
 ```
 
-Six modules sit outside `server.js`. Five are about the record a debate leaves
-behind, which outlives the process in a way a live room does not. `format.js` is
-separate for a different reason: it is pure data and pure functions, while the
-running clock is state, so the schedule and the timer live apart.
+Seven modules sit outside `server.js`. Five are about the record a debate
+leaves behind, which outlives a live room. `format.js` is separate because it
+is pure data and pure functions, while the running clock is state, so the
+schedule and the timer live apart. `db.js` holds the SQL for the live store's
+durable copy, so section 2 reads as a store rather than as a page of queries.
 
 ## Architecture
 
@@ -67,8 +69,9 @@ running clock is state, so the schedule and the timer live apart.
    close handshake, and a 64 KB frame cap. Unmasked client frames, reserved
    bits, and oversized or malformed control frames close the connection.
 2. **Store.** Every `Map` and array lives here behind a small API
-   (`createRoom`, `addMember`, `takeSeat`, `appendMessage`, `openBallot`, ...).
-   Handlers never touch the `Map` directly.
+   (`createRoom`, `addMember`, `takeSeat`, `appendMessage`, `openBallot`, ...),
+   written through to SQLite as it changes. Handlers never touch the `Map` or
+   the database directly.
 3. **Handlers.** One function per message type. They validate, mutate the store,
    and broadcast. They return an ack payload; failure is `{ error: "…" }`, never
    a thrown exception.
@@ -83,8 +86,63 @@ down.' }` and an unacked one is dropped. A client that keeps pushing through
 200 refusals in a row is disconnected. It is sized so no person typing can hit
 it and a script flooding broadcasts runs dry within two seconds.
 
-Live room state is in memory, so restarting the server clears every room in
-progress. Concluded debates are on disk and survive.
+### Surviving a restart
+
+Live rooms used to be memory only, so every redeploy wiped every debate in
+progress, which on a site that deploys on every push is most of them. The store
+now writes through to SQLite, using Node's built-in `node:sqlite`, so there is
+still nothing to install. Live rooms, seats, both message streams, ballots, the
+clock, the floor's questions and votes, the challenge board and handles all
+persist. The SQL lives in `db.js`; section 2 is still the only code that calls
+it.
+
+**Memory stays the working copy.** Every handler reads room state on every
+message, and a room also holds things no database can, open sockets and
+timers. So the store keeps its objects, writes each change through as it makes
+it, and reads the database exactly once, at boot. A write that fails is logged
+and the room carries on, since a debate should not stop mid-sentence because a
+disk filled up; all that is lost is surviving the next restart.
+
+**The archive stays JSON.** A settled debate is a record with a permanent URL,
+and a folder of JSON files anyone can read without the app is the right shape
+for that. The database holds the opposite: state that only matters while a
+debate is still live. Settling a debate deletes its live rows, and its archive
+file was written first, so nothing is ever in both places for long and nothing
+is ever in neither. The database file, `live.sqlite`, sits next to the archive
+under `ARCHIVE_DIR`, so in production it is on the same volume and survives a
+redeploy for the same reason the archive does.
+
+**The swap was not quite section 2 alone**, which this file used to promise. The
+store API kept every method and signature, but three things the handlers did
+were plain assignments to objects the store had handed out: flipping a ballot's
+current lean, striking a ballot when its owner sat down, and the clock code
+changing `room.turn`. A database cannot see an assignment, so those now go
+through `setLean`, `strikeBallot` and `saveTurn`. That is a better rule
+anyway: the store owns its objects, and nobody edits them behind its back.
+
+**On boot**, every room that was live comes back with its history, ballots,
+questions and turn. The clock comes back paused, whatever it was doing, and the
+stage carries a system line saying the server restarted, which is the one
+system line kept in the history, because a late arrival needs it to make sense
+of a stopped clock. The time left on a turn that was running is measured
+against when the process was last alive. A deploy sends SIGTERM first, and the
+server pauses every running clock then, so the time is exact. A crash gives no
+warning, so the server also writes a heartbeat every five seconds, and a crash
+costs a turn at most five seconds, never the time the server spent down.
+
+A restart is everybody's connection dropping at once, and a dropped connection
+frees a seat. Taken literally, that would let anyone watching grab a debater's
+seat while the debater's page was still reconnecting. So restored seats are
+**held** for the browser that sat in them, matched on the same browser id the
+ballots use, for the same five-minute grace period an empty room gets. The
+lobby and the seat bar show the seat as away. The debater's own browser can sit
+straight back down; anyone else is told who it is held for. When both are back
+the clock runs again from where it stopped, through exactly the path an
+emptied seat already used. A hold that runs out frees the seat. Challenges come
+back too, every one of them marked away, since every poster is offline after a
+restart; each reattaches when its page reconnects, or dies after the grace
+period like any orphaned challenge. Message ids keep counting up across the
+restart.
 
 ### Data model
 
@@ -95,13 +153,16 @@ Room {
   createdAt,
   status,          // 'live' | 'concluded'
   result,          // the archived record, once concluded
-  seats: { pro: { clientId, name } | null,
-           con: { clientId, name } | null },
+  seats: { pro: { clientId, name, handle, voterId } | null,
+           con: { clientId, name, handle, voterId } | null },
+                   // clientId is null while a seat is held after a restart
   debateMessages: [ { id, role, name, text, ts } ],
   audienceMessages: [ … ],
   members: Set<Client>,
   ballots: Map<voterId, { entry, current, seated }>,
   turn: { index, endsAt, remainingMs, paused, pausedReason, over },
+  questions: [ { id, voterId, name, text, ts, votes: Set<voterId> } ],
+  pinnedQuestionId,
 }
 ```
 
@@ -144,7 +205,9 @@ back that one shape, so the client has one function that paints a room and
 does not care how it got there.
 
 Room summary: `{ id, topic, createdAt, status, proTaken, conTaken, proName,
-conName, audienceCount }`.
+conName, proHandle, conHandle, proAway, conAway, audienceCount }`. `proAway` and
+`conAway` mark a seat held for a debater who has not reconnected since a
+restart.
 
 Joining always lands you in the audience. Seats are claimed explicitly,
 including after a reconnect. The two exceptions are a rematch and an accepted
@@ -461,7 +524,10 @@ allowlist that would need editing per environment.
 filesystem is discarded on every redeploy, so without one, every settled debate
 and every permalink dies the next time you push. A volume named
 `debate-archives` is mounted at `/data`, and `ARCHIVE_DIR=/data` points the
-archive at it.
+archive at it. The live store's `live.sqlite` goes in the same directory, so the
+same volume is what lets a debate in progress survive a push. Railway sends
+SIGTERM before replacing a container, which is what lets the clocks stop at the
+exact second rather than at the last heartbeat.
 
 One trap worth recording, because it cost two redeploys to find. Creating the
 volume through the API only *stages* the mount. The staged config and the
@@ -709,7 +775,7 @@ is a name and a boolean, and the runner is forty lines at the top of the file.
 Node 22 ships a global `WebSocket` client, so the tests speak to the server
 through the same API a browser uses.
 
-231 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so an eight-turn
+244 checks. The server is spawned with `DEBATE_TURN_SECONDS=1`, so an eight-turn
 format runs in eight seconds rather than seventeen minutes.
 
 The first 40 cover the live room: lobby push on connect, topic
@@ -784,6 +850,15 @@ out of a live debate, a dropped poster marked away and untakeable, a reload
 reclaiming it inside the grace period, and the two timed deaths: a poster gone
 past the grace period, and nobody taking it in time.
 
+The restart checks run last, against a second server on its own port and
+directory, killed outright mid-debate with no chance to shut down cleanly. 13
+of them: the live room coming back with its seats held, challenges coming back
+away, the transcript, the restart line, ballots with both the entry stance and
+the lean, the clock paused on the same turn with its time, a held seat refusing
+someone else and returning to its own browser, the clock running again, message
+ids still counting up, handles surviving, and a settled debate not coming back
+as live while its permalink still stands.
+
 The next 31 cover the mothership: Host-header routing to the homepage on both
 home hosts and the app everywhere else, `/home` and `/arena` crossing the split,
 the homepage's stricter script policy and its `media-src` allowance, the
@@ -849,9 +924,10 @@ as separate ballots, since one browser profile is deliberately one voter.
 - **Ballot stuffing.** `voterId` is client-supplied. Clearing storage or opening
   a private window buys another ballot. This is the honest cost of having no
   accounts, and the fix is accounts, not a cleverer id.
-- **Single process.** Live rooms are in memory, so this does not scale past one
-  server. The store is the only place that state lives, so moving to Postgres or
-  SQLite means rewriting section 2 alone.
+- **Single process.** Live rooms survive a restart now, but the working copy is
+  still one process's memory, so this does not scale past one server. Two
+  servers would need the database to be the working copy, read on every
+  message, which is a different design rather than a bigger one.
 - **No moderation.** Anonymous display names, no reporting, no blocking.
 - **Archive growth.** Unbounded on disk, by design. There is no pruning job and
   deliberately so.

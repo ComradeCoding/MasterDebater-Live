@@ -1831,9 +1831,10 @@
     var r = currentRoom;
     if (!r) return;
 
-    $('proWho').textContent = r.proTaken ? r.proName : 'Open seat';
+    // A held seat is waiting for its debater to reconnect after a restart.
+    $('proWho').textContent = r.proTaken ? r.proName + (r.proAway ? ' (away)' : '') : 'Open seat';
     $('proWho').className = 'who' + (r.proTaken ? '' : ' open');
-    $('conWho').textContent = r.conTaken ? r.conName : 'Open seat';
+    $('conWho').textContent = r.conTaken ? r.conName + (r.conAway ? ' (away)' : '') : 'Open seat';
     $('conWho').className = 'who' + (r.conTaken ? '' : ' open');
     ['pro', 'con'].forEach(function (side) {
       var h = r[side + 'Taken'] ? r[side + 'Handle'] : null;
@@ -1856,7 +1857,9 @@
         btn.disabled = concluded;
       } else {
         btn.textContent = 'Take side';
-        btn.disabled = concluded || r[side + 'Taken'] || myRole === other;
+        // Live for a held seat: the server gives it back to its own browser
+        // and tells anybody else who it is being kept for.
+        btn.disabled = concluded || (r[side + 'Taken'] && !r[side + 'Away']) || myRole === other;
       }
     });
 
@@ -2258,6 +2261,9 @@
   socket.on('debate:system', function (m) { addSystem($('debateMsgs'), m.text, m.roomId); });
 
   function addDebateMsg(m) {
+    // The one system line that is kept in the history: the server restarting,
+    // which a late arrival needs to see to make sense of a paused clock.
+    if (m.role === 'system') return addSystem($('debateMsgs'), m.text);
     var el = document.createElement('div');
     el.className = 'bubble ' + (m.role === 'con' ? 'con' : 'pro');
     el.innerHTML =

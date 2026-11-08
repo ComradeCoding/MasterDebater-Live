@@ -1,17 +1,17 @@
 'use strict';
 //
-// Archive: the only part of this app that survives a restart.
+// Archive: the permanent record of every settled debate.
 //
-// Live rooms are deliberately ephemeral: they are reaped five minutes after
-// going empty and nothing is written down. A CONCLUDED debate is the opposite.
-// It is a record, it gets a permanent URL, and it is the only thing anyone can
-// share, so it has to outlive the process that produced it.
+// Live rooms survive a restart through the SQLite store (db.js), but only
+// until they settle; they are reaped when they go empty and their rows are
+// deleted when they conclude. A CONCLUDED debate is the opposite. It is a
+// record, it gets a permanent URL, and it is the only thing anyone can share,
+// so it has to outlive everything else here.
 //
-// One JSON file per debate under `data/`. No database, because the access
+// One JSON file per debate under `data/`, not a table, because the access
 // pattern is write-once/read-by-id, which is the shape a filesystem already
 // is, and because a folder of JSON is a record anyone can read without the
-// app. Section 2 of server.js is still the swap point if that ever stops
-// being true.
+// app. The live database sits in the same directory.
 
 const fs = require('fs');
 const path = require('path');

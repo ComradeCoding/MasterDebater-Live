@@ -63,6 +63,10 @@ function countRow(t) {
 function transcript(messages, startedAt) {
   if (!messages.length) return '<div class="none">No arguments on the record.</div>';
   return '<div class="script">' + messages.map((m) => {
+    // A restart line sits on the seam, as it did on the live stage.
+    if (m.role === 'system') {
+      return `<div class="sys">${esc(m.text)} · ${elapsed(m.ts, startedAt)}</div>`;
+    }
     const side = m.role === 'con' ? 'con' : 'pro';
     return `<div class="arg ${side}">` +
       `<div class="from">${esc(m.name)} · ${side.toUpperCase()} · ${elapsed(m.ts, startedAt)}</div>` +
@@ -297,6 +301,13 @@ function render(record, origin) {
     border: 0; box-shadow: var(--paste) var(--neon); transform: rotate(var(--tilt));
   }
   .questions li.pinned .v, .questions li.pinned .who { color: var(--neon-deep); }
+
+  .script .sys {
+    grid-column: 1 / -1; justify-self: center; text-align: center;
+    font-family: var(--data); font-size: 10px; font-weight: 700; letter-spacing: .16em;
+    text-transform: uppercase; color: #fff; background: var(--neon-deep);
+    padding: 5px 14px; transform: rotate(var(--tilt));
+  }
 
   .floor { border-top: 1px solid var(--rule); }
   .floor .line {
